@@ -10,7 +10,7 @@ RUN npm run build
 
 
 # ---------- 阶段 2：Python 运行时 ----------
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # CI 会传入真实版本号（= git tag）；本地构建时留空则读 VERSION 文件
 ARG APP_VERSION=""
