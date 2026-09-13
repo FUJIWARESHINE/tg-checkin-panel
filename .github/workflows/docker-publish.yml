@@ -1,0 +1,232 @@
+name: Docker 镜像构建与发布
+
+# 触发时机：
+#   1. 推送版本 tag（形如 v1.2.3）→ 构建多架构镜像 + 打版本号标签 + 打 latest + 创建 GitHub Release
+#   2. 推送到 main 分支          → 构建并打 edge 标签（最新开发版，不覆盖 latest）
+#   3. 手动触发                  → 可选是否推送
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 是否推送镜像到 GHCR（取消勾选则只构建不推送）
+        type: boolean
+        default: true
+
+# 同一 ref 上只保留最新一次运行，避免重复构建浪费额度
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # 自动使用 owner/repo，无需手写用户名
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # 第一关：代码校验。测试不过就不出镜像。
+  # ------------------------------------------------------------------
+  verify:
+    name: 校验（版本一致性 + 后端冒烟 + 前端构建）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: 安装后端依赖
+        run: pip install -r backend/requirements.txt
+
+      - name: 校验 tag 与 VERSION 文件是否一致
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          file_version="$(tr -d 'v \t\r\n' < VERSION)"
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ "$file_version" != "$tag_version" ]; then
+            echo "::error::VERSION 文件是 $file_version，但 tag 是 $tag_version。请先更新 VERSION 文件并提交，再重新打 tag。"
+            exit 1
+          fi
+          echo "✅ 版本一致：$tag_version"
+
+      - name: 后端冒烟测试
+        run: python backend/tests/smoke.py
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: 前端生产构建
+        working-directory: frontend
+        run: npm run build
+
+  # ------------------------------------------------------------------
+  # 第二关：构建多架构镜像并推送 GHCR
+  # ------------------------------------------------------------------
+  build:
+    name: 构建并推送镜像
+    needs: [verify]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 设置 QEMU（构建 arm64 镜像用）
+        uses: docker/setup-qemu-action@v3
+
+      - name: 设置 Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像标签与元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # v1.2.3 -> 1.2.3
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # v1.2.3 -> 1.2
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # v1.2.3 -> 1（v0.x 不打，避免 0 标签乱跑）
+            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/v') && !startsWith(github.ref_name, 'v0.') }}
+            # 正式发版才动 latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # main 分支 = edge
+            type=edge,branch=main
+            # 每次构建的短 SHA，便于回溯
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=TG 自动签到面板
+            org.opencontainers.image.description=Telegram 自动签到 + 可视化 Web 面板（单容器部署）
+            org.opencontainers.image.version=${{ steps.version.outputs.value }}
+
+      - name: 构建并推送
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
+            VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+
+      - name: 写入构建摘要
+        run: |
+          {
+            echo "## 🐳 镜像构建完成"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "|---|---|"
+            echo "| 版本 | \`${{ steps.version.outputs.value }}\` |"
+            echo "| 平台 | \`linux/amd64\`, \`linux/arm64\` |"
+            echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
+            echo ""
+            echo "### 镜像标签"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "### 拉取方式"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.value }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------
+  # 第三关：打 tag 时自动创建 GitHub Release
+  # ------------------------------------------------------------------
+  release:
+    name: 创建 GitHub Release
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 创建 Release 并附带自动生成的变更说明
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## 🐳 Docker 镜像
+
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
+
+            同时提供 `latest` 与 `${{ needs.build.outputs.version }}` 两个标签。
+
+            | 项目 | 值 |
+            |---|---|
+            | 支持架构 | `linux/amd64`、`linux/arm64` |
+            | Digest | `${{ needs.build.outputs.digest }}` |
+
+            ## 🚀 升级到本版本
+
+            ```bash
+            # 方式一：compose 拉取镜像
+            docker compose -f docker-compose.ghcr.yml pull
+            docker compose -f docker-compose.ghcr.yml up -d
+
+            # 方式二：直接用镜像运行
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ```
+
+            > 数据都挂在 `./data` 卷里，升级不会丢数据。

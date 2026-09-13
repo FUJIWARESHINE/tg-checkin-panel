@@ -1,0 +1,17 @@
+fastapi>=0.115,<0.117
+uvicorn[standard]>=0.34,<0.35
+pydantic>=2.10,<3.0
+pydantic-settings>=2.7,<3.0
+sqlalchemy[asyncio]>=2.0.36,<2.1
+aiosqlite>=0.20,<0.22
+apscheduler>=3.10.4,<4.0
+telethon>=1.37,<2.0
+python-socks[asyncio]>=2.6,<3.0
+pyjwt>=2.10,<3.0
+bcrypt>=4.2,<5.0
+cryptography>=44.0,<46.0
+httpx>=0.28,<0.29
+qrcode>=8.0,<9.0
+pillow>=11.0,<12.0
+python-multipart>=0.0.20,<0.1
+croniter>=6.0,<7.0

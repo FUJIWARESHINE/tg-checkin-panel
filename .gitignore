@@ -1,0 +1,28 @@
+# 依赖
+node_modules/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 构建产物
+frontend/dist/
+static/
+
+# 运行时数据（含 session、数据库、日志，绝不入库）
+data/
+*.session
+*.session-journal
+logs/
+backend/tests/smoke-result.txt
+
+# 环境变量
+.env
+.env.*
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

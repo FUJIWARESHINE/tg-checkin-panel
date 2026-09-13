@@ -1,0 +1,36 @@
+services:
+  tg-checkin-panel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 本地 build 出来的镜像也会打上这个 GHCR 名字；
+    # 只想用官方镜像、不自己编译 → 改用 docker-compose.ghcr.yml
+    image: ghcr.io/fujiwarshine/tg-checkin-panel:${TG_IMAGE_TAG:-latest}
+    container_name: tg-checkin-panel
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      SECRET_KEY: ${SECRET_KEY:-}
+      MASTER_KEY: ${MASTER_KEY:-}
+      TG_PROXY: ${TG_PROXY:-}
+      DEBUG: ${DEBUG:-false}
+    extra_hosts:
+      # Linux 上让容器能通过 host.docker.internal 访问宿主机代理
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
