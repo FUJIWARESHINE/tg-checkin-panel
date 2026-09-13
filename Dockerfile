@@ -1,5 +1,8 @@
 # ---------- 阶段 1：构建前端 ----------
-FROM node:22-alpine AS web
+# 关键：强制跑在构建机原生架构（BUILDPLATFORM）上，而不是目标架构。
+# 前端产物（HTML/JS/CSS）与 CPU 架构无关，没必要在 QEMU 模拟的 arm64 里编译 ——
+# 那样做会把 npm ci + vite build 拖慢 3~4 倍（实测 8 分钟 → 25 分钟以上）。
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
@@ -10,6 +13,7 @@ RUN npm run build
 
 
 # ---------- 阶段 2：Python 运行时 ----------
+# 这个阶段必须跑在目标架构上（pip 要装对应架构的二进制 wheel）。
 FROM python:3.12-slim
 
 # CI 会传入真实版本号（= git tag）；本地构建时留空则读 VERSION 文件
