@@ -1,40 +1,75 @@
 version: 2
 
+# 保守策略说明：
+#   1. 每个生态的 minor/patch 更新合并成一个分组 PR，避免 PR 刷屏
+#   2. 一律忽略 major 版本跳跃 —— 由人手动评估（API 大改、构建基础镜像换代风险高）
+#   3. 频率：代码依赖每周、CI 与基础镜像每月
 updates:
-  # 后端 Python 依赖
-  - package-ecosystem: pip
-    directory: /backend
+  # ---------------- 后端 Python 依赖 ----------------
+  - package-ecosystem: "pip"
+    directory: "/backend"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      python-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
-  # 前端 npm 依赖
-  - package-ecosystem: npm
-    directory: /frontend
+  # ---------------- 前端 npm 依赖 ----------------
+  - package-ecosystem: "npm"
+    directory: "/frontend"
     schedule:
-      interval: weekly
-      day: monday
-    open-pull-requests-limit: 5
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "chore(deps)"
+      prefix-development: "chore(dev-deps)"
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
-  # 基础镜像（python:3.12-slim / node:22-alpine）
-  - package-ecosystem: docker
-    directory: /
+  # ---------------- GitHub Actions ----------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: weekly
-      day: monday
-    commit-message:
-      prefix: "chore(deps)"
-
-  # GitHub Actions 版本
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: weekly
-      day: monday
+      interval: "monthly"
+    open-pull-requests-limit: 2
     commit-message:
       prefix: "chore(ci)"
+    groups:
+      github-actions-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+    ignore:
+      # actions/checkout、setup-*、docker/* 的大版本经常有行为变更，手动升
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  # ---------------- Dockerfile 基础镜像 ----------------
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(docker)"
+    ignore:
+      # node:26 / python:3.14 这类换代必须人工验证，不自动提
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
