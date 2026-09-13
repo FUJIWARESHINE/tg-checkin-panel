@@ -1,7 +1,7 @@
 fastapi>=0.115,<0.117
 uvicorn[standard]>=0.34,<0.35
 pydantic>=2.10,<3.0
-pydantic-settings>=2.7,<3.0
+pydantic-settings>=2.15.0,<3.0
 sqlalchemy[asyncio]>=2.0.36,<2.1
 aiosqlite>=0.20,<0.22
 apscheduler>=3.10.4,<4.0
