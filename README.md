@@ -1,9 +1,9 @@
 # TG 自动签到面板（tg-checkin-panel）
 
-[![Docker 镜像构建与发布](https://github.com/FUJIWARSHINE/tg-checkin-panel/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/FUJIWARSHINE/tg-checkin-panel/actions/workflows/docker-publish.yml)
-[![CI 代码校验](https://github.com/FUJIWARSHINE/tg-checkin-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/FUJIWARSHINE/tg-checkin-panel/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/github/v/release/FUJIWARSHINE/tg-checkin-panel?label=version&color=green)](https://github.com/FUJIWARSHINE/tg-checkin-panel/releases)
-[![GHCR](https://img.shields.io/badge/ghcr.io-tg--checkin--panel-blue?logo=docker)](https://github.com/FUJIWARSHINE/tg-checkin-panel/pkgs/container/tg-checkin-panel)
+[![Docker 镜像构建与发布](https://github.com/FUJIWARESHINE/tg-checkin-panel/actions/workflows/docker-publish.yml/badge.svg)](https://github.com/FUJIWARESHINE/tg-checkin-panel/actions/workflows/docker-publish.yml)
+[![CI 代码校验](https://github.com/FUJIWARESHINE/tg-checkin-panel/actions/workflows/ci.yml/badge.svg)](https://github.com/FUJIWARESHINE/tg-checkin-panel/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/v/release/FUJIWARESHINE/tg-checkin-panel?label=version&color=green)](https://github.com/FUJIWARESHINE/tg-checkin-panel/releases)
+[![GHCR](https://img.shields.io/badge/ghcr.io-tg--checkin--panel-blue?logo=docker)](https://github.com/FUJIWARESHINE/tg-checkin-panel/pkgs/container/tg-checkin-panel)
 
 一个 Docker 单容器部署的 **Telegram 自动签到服务**：每天定时用你的个人号给目标机器人发送签到消息，
 带精美 Web 管理界面、可视化拖拽的动作流编辑器、灵活的定时调度和详细的推送通知。
@@ -90,8 +90,8 @@
 mkdir tg-checkin-panel && cd tg-checkin-panel
 
 # 下载编排文件与环境变量模板
-curl -O https://raw.githubusercontent.com/FUJIWARSHINE/tg-checkin-panel/main/docker-compose.ghcr.yml
-curl -o .env https://raw.githubusercontent.com/FUJIWARSHINE/tg-checkin-panel/main/.env.example
+curl -O https://raw.githubusercontent.com/FUJIWARESHINE/tg-checkin-panel/main/docker-compose.ghcr.yml
+curl -o .env https://raw.githubusercontent.com/FUJIWARESHINE/tg-checkin-panel/main/.env.example
 
 # 编辑 .env：至少改 ADMIN_PASSWORD 和 TG_PROXY
 
@@ -101,7 +101,7 @@ docker compose -f docker-compose.ghcr.yml up -d
 **方式 B：从源码构建**
 
 ```bash
-git clone https://github.com/FUJIWARSHINE/tg-checkin-panel.git
+git clone https://github.com/FUJIWARESHINE/tg-checkin-panel.git
 cd tg-checkin-panel
 
 # 复制并修改环境变量
@@ -236,7 +236,7 @@ docker compose up -d --build --force-recreate   # 改代码后重建
 镜像发布在 GitHub Container Registry（GHCR），**无需配置任何 Secret**，靠仓库自带的 `GITHUB_TOKEN` 推送。
 
 ```bash
-docker pull ghcr.io/fujiwarshine/tg-checkin-panel:latest
+docker pull ghcr.io/fujiwareshine/tg-checkin-panel:latest
 ```
 
 ### 标签规则

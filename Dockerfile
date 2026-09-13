@@ -16,7 +16,7 @@ FROM python:3.12-slim
 ARG APP_VERSION=""
 ARG VCS_REF="unknown"
 ARG BUILD_DATE=""
-ARG IMAGE_SOURCE="https://github.com/FUJIWARSHINE/tg-checkin-panel"
+ARG IMAGE_SOURCE="https://github.com/FUJIWARESHINE/tg-checkin-panel"
 
 LABEL org.opencontainers.image.title="TG 自动签到面板" \
       org.opencontainers.image.description="Telegram 自动签到 + 可视化 Web 面板（单容器部署）" \

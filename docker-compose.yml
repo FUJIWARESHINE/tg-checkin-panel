@@ -5,7 +5,7 @@ services:
       dockerfile: Dockerfile
     # 本地 build 出来的镜像也会打上这个 GHCR 名字；
     # 只想用官方镜像、不自己编译 → 改用 docker-compose.ghcr.yml
-    image: ghcr.io/fujiwarshine/tg-checkin-panel:${TG_IMAGE_TAG:-latest}
+    image: ghcr.io/fujiwareshine/tg-checkin-panel:${TG_IMAGE_TAG:-latest}
     container_name: tg-checkin-panel
     restart: unless-stopped
     ports:
