@@ -201,7 +201,7 @@ jobs:
           fetch-depth: 0
 
       - name: 创建 Release 并附带自动生成的变更说明
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           body: |
