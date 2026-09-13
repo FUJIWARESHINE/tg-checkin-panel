@@ -1,5 +1,5 @@
 # ---------- 阶段 1：构建前端 ----------
-FROM node:22-alpine AS web
+FROM node:26-alpine AS web
 
 WORKDIR /web
 COPY frontend/package.json frontend/package-lock.json ./
