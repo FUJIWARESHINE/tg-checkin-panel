@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
 from ..core.client_pool import TelegramCallError, pool
-from ..core.login import login_manager, qr_data_uri
+from ..core.login import login_manager
 from ..db import session_scope
 from ..logging_setup import logger
 from ..models import Account, Task
@@ -19,8 +19,6 @@ from ..schemas import (
     DialogOut,
     LoginStateOut,
     OkOut,
-    QrPollOut,
-    QrStartOut,
     SendCodeIn,
     SendCodeOut,
     VerifyCodeIn,
@@ -197,43 +195,6 @@ async def verify_password(payload: VerifyPasswordIn, _: str = Depends(current_us
     except TelegramCallError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return await _finish_login(item)
-
-
-@router.post("/{account_id}/login/qr", response_model=QrStartOut)
-async def start_qr(account_id: int, _: str = Depends(current_user)) -> QrStartOut:
-    account = await _get_account(account_id)
-    api_hash = decrypt(account.api_hash) or ""
-    try:
-        item, url, expires = await login_manager.start_qr(
-            account_id=account_id,
-            api_id=account.api_id,
-            api_hash=api_hash,
-            session_path=account.session_path or session_path_for(account_id),
-            proxy=account.proxy or settings.tg_proxy,
-        )
-    except TelegramCallError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    async with session_scope() as session:
-        row = await session.get(Account, account_id)
-        if row is not None:
-            row.status = "need_qr"
-    return QrStartOut(login_token=item.token, url=qr_data_uri(url), expires_at=expires)
-
-
-@router.get("/login/qr/{token}", response_model=QrPollOut)
-async def poll_qr(token: str, _: str = Depends(current_user)) -> QrPollOut:
-    item = login_manager.get(token)
-    if item is None:
-        return QrPollOut(state="error", message="登录会话不存在或已过期")
-    if item.state == "done":
-        result = await _finish_login(item)
-        return QrPollOut(state="done", message=result.message, account_id=result.account_id)
-    if item.state == "need_password":
-        return QrPollOut(state="need_password", message=item.message)
-    if item.state == "error":
-        return QrPollOut(state="error", message=item.message)
-    return QrPollOut(state="pending", message="等待扫码…")
 
 
 async def _finish_login(item) -> LoginStateOut:  # noqa: ANN001

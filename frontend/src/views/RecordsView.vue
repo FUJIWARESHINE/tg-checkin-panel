@@ -37,6 +37,9 @@ const filter = ref({
 const detailShow = ref(false)
 const detail = ref<RecordItem | null>(null)
 
+const checkedRowKeys = ref<number[]>([])
+const deleting = ref(false)
+
 const taskOptions = ref<{ label: string; value: number }[]>([])
 
 async function load() {
@@ -79,12 +82,50 @@ function exportCsv() {
 }
 
 async function clearRecords(days: number) {
+  deleting.value = true
   try {
     const res = await recordApi.clear(days)
     feedback.ok(res.message)
-    load()
+    checkedRowKeys.value = []
+    page.value = 1
+    await load()
   } catch (error) {
     feedback.error(extractError(error))
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function removeSelected() {
+  const ids = [...checkedRowKeys.value]
+  if (!ids.length) return
+  deleting.value = true
+  try {
+    const res = await recordApi.removeSelected(ids)
+    feedback.ok(res.message)
+    // 整页都被删掉时回退一页，避免停在空白页
+    if (ids.length >= rows.value.length && page.value > 1) page.value -= 1
+    checkedRowKeys.value = []
+    await load()
+  } catch (error) {
+    feedback.error(extractError(error))
+  } finally {
+    deleting.value = false
+  }
+}
+
+async function clearAllRecords() {
+  deleting.value = true
+  try {
+    const res = await recordApi.clearAll()
+    feedback.ok(res.message)
+    checkedRowKeys.value = []
+    page.value = 1
+    await load()
+  } catch (error) {
+    feedback.error(extractError(error))
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -94,6 +135,7 @@ function openDetail(row: RecordItem) {
 }
 
 const columns: DataTableColumns<RecordItem> = [
+  { type: 'selection' },
   { title: '时间', key: 'run_at', width: 168, render: (row) => formatTime(row.run_at) },
   { title: '任务', key: 'task_name', minWidth: 130, ellipsis: { tooltip: true } },
   { title: '账号', key: 'account_name', width: 110, ellipsis: { tooltip: true } },
@@ -145,11 +187,25 @@ onMounted(async () => {
       </div>
       <n-space>
         <n-button @click="exportCsv">导出 CSV</n-button>
+        <n-button
+          type="error"
+          :disabled="!checkedRowKeys.length"
+          :loading="deleting"
+          @click="removeSelected"
+        >
+          删除选中{{ checkedRowKeys.length ? `（${checkedRowKeys.length}）` : '' }}
+        </n-button>
         <n-popconfirm @positive-click="() => clearRecords(30)">
           <template #trigger>
-            <n-button type="error" quaternary>清理 30 天前</n-button>
+            <n-button type="error" quaternary :loading="deleting">清理 30 天前</n-button>
           </template>
           删除 30 天以前的记录，确定？
+        </n-popconfirm>
+        <n-popconfirm @positive-click="clearAllRecords">
+          <template #trigger>
+            <n-button type="error" quaternary :loading="deleting">清空全部</n-button>
+          </template>
+          将删除全部 {{ total }} 条签到记录，且不可恢复，确定继续？
         </n-popconfirm>
         <n-button :loading="loading" @click="load">刷新</n-button>
       </n-space>
@@ -186,6 +242,7 @@ onMounted(async () => {
       </n-space>
 
       <n-data-table
+        v-model:checked-row-keys="checkedRowKeys"
         :columns="columns"
         :data="rows"
         :bordered="false"

@@ -1,14 +1,11 @@
-"""登录状态机：手机号 + 验证码、2FA 密码、二维码登录。"""
+"""登录状态机：手机号 + 验证码、2FA 密码。"""
 
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from telethon import TelegramClient
@@ -20,8 +17,6 @@ from telethon.errors import (
 )
 from telethon.sessions import StringSession
 
-import qrcode
-
 from ..logging_setup import logger
 from ..settings import settings
 from .client_pool import TelegramCallError, parse_proxy
@@ -29,34 +24,17 @@ from .client_pool import TelegramCallError, parse_proxy
 PENDING_TTL = 600  # 10 分钟
 
 
-def qr_expires_at(qr: Any) -> datetime:
-    """把 QRLogin 的过期信息统一换算成带时区的 UTC 时间点。
-
-    注意：Telethon 的 ``QRLogin.expires`` 是 ``datetime``（绝对时间），不是秒数。
-    旧写法 ``timedelta(seconds=getattr(qr, "expires", 60))`` 会在属性存在时抛
-    ``TypeError: unsupported type for timedelta seconds component``。
-    """
-    value = getattr(qr, "expires", None)
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
-    seconds = float(value) if isinstance(value, (int, float)) else 60.0
-    return datetime.now(timezone.utc) + timedelta(seconds=max(1.0, seconds))
-
-
 @dataclass
 class PendingLogin:
     token: str
     account_id: int
-    mode: str  # phone | qr
+    mode: str  # phone
     client: TelegramClient
     phone: str = ""
     phone_code_hash: str = ""
     state: str = "need_code"
     message: str = ""
     created_at: float = field(default_factory=time.time)
-    qr_task: asyncio.Task[Any] | None = None
 
     @property
     def expired(self) -> bool:
@@ -81,8 +59,6 @@ class LoginManager:
                     self._pending.pop(token, None)
 
     async def _dispose(self, item: PendingLogin) -> None:
-        if item.qr_task and not item.qr_task.done():
-            item.qr_task.cancel()
         try:
             await item.client.disconnect()
         except Exception:  # noqa: BLE001
@@ -199,60 +175,6 @@ class LoginManager:
         item.message = "登录成功"
         return item
 
-    # ------------------------------------------------------------ 二维码登录
-
-    async def start_qr(
-        self, *, account_id: int, api_id: int, api_hash: str, session_path: str, proxy: str = ""
-    ) -> tuple[PendingLogin, str, datetime]:
-        client = self.build_client(api_id, api_hash, session_path, proxy)
-        try:
-            await client.connect()
-        except Exception as exc:  # noqa: BLE001
-            raise TelegramCallError(f"连接 Telegram 失败：{exc}", kind="network") from exc
-
-        qr = await client.qr_login()
-        item = PendingLogin(
-            token=self._new_token(),
-            account_id=account_id,
-            mode="qr",
-            client=client,
-            state="pending",
-        )
-        item.qr_task = asyncio.create_task(self._qr_waiter(item, qr))
-        await self._put(item)
-
-        return item, qr.url, qr_expires_at(qr)
-
-    async def _qr_waiter(self, item: PendingLogin, qr: Any) -> None:
-        try:
-            while True:
-                try:
-                    await qr.wait(timeout=30)
-                    item.state = "done"
-                    item.message = "扫码登录成功"
-                    logger.info("账号 %s 二维码登录成功", item.account_id)
-                    return
-                except asyncio.TimeoutError:
-                    if item.expired:
-                        item.state = "error"
-                        item.message = "二维码已过期"
-                        return
-                    try:
-                        await qr.recreate()
-                    except Exception as exc:  # noqa: BLE001
-                        item.state = "error"
-                        item.message = f"二维码刷新失败：{exc}"
-                        return
-                except SessionPasswordNeededError:
-                    item.state = "need_password"
-                    item.message = "该账号已开启两步验证，请输入密码"
-                    return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            item.state = "error"
-            item.message = f"二维码登录失败：{exc}"
-
     # ------------------------------------------------------------ 收尾
 
     def take_session_string(self, item: PendingLogin) -> str:
@@ -275,13 +197,6 @@ class LoginManager:
         await item.client.disconnect()
         item.client = None  # type: ignore[assignment]
         return me_info
-
-
-def qr_data_uri(url: str) -> str:
-    img = qrcode.make(url)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")  # type: ignore[arg-type]
-    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 login_manager = LoginManager()

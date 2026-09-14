@@ -210,8 +210,6 @@ export const accountApi = {
     http.post('/api/accounts/login/verify-code', { login_token, code }).then((r) => r.data),
   verifyPassword: (login_token: string, password: string) =>
     http.post('/api/accounts/login/verify-password', { login_token, password }).then((r) => r.data),
-  startQr: (id: number) => http.post(`/api/accounts/${id}/login/qr`).then((r) => r.data),
-  pollQr: (token: string) => http.get(`/api/accounts/login/qr/${token}`).then((r) => r.data),
   logout: (id: number) => http.post(`/api/accounts/${id}/logout`).then((r) => r.data),
   check: (id: number) => http.post(`/api/accounts/${id}/check`).then((r) => r.data),
   dialogs: (id: number) => http.get<DialogItem[]>(`/api/accounts/${id}/dialogs`).then((r) => r.data)
@@ -244,7 +242,16 @@ export const recordApi = {
       .get('/api/records', { params })
       .then((r) => r.data as { total: number; page: number; page_size: number; items: RecordItem[] }),
   stats: (days = 30) => http.get<StatsData>('/api/records/stats', { params: { days } }).then((r) => r.data),
-  clear: (days = 0) => http.delete('/api/records', { params: { days } }).then((r) => r.data),
+  /** 删除 N 天以前的记录 */
+  clear: (days = 30) =>
+    http.delete('/api/records', { params: { scope: 'before', days } }).then((r) => r.data),
+  /** 只删除选中的记录 */
+  removeSelected: (ids: number[]) =>
+    http
+      .delete('/api/records', { params: { scope: 'ids', ids: ids.join(',') } })
+      .then((r) => r.data),
+  /** 清空全部记录 */
+  clearAll: () => http.delete('/api/records', { params: { scope: 'all' } }).then((r) => r.data),
   exportUrl: (params: Record<string, any>) => {
     const search = new URLSearchParams()
     Object.entries(params).forEach(([k, v]) => {

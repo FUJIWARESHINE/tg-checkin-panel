@@ -125,20 +125,6 @@ class LoginStateOut(BaseModel):
     account_id: int | None = None
 
 
-class QrStartOut(BaseModel):
-    ok: bool = True
-    login_token: str
-    url: str
-    expires_at: datetime | None = None
-
-
-class QrPollOut(BaseModel):
-    ok: bool = True
-    state: Literal["pending", "need_password", "done", "error"]
-    message: str = ""
-    account_id: int | None = None
-
-
 class DialogOut(BaseModel):
     id: int
     title: str

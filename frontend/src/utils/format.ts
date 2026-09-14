@@ -56,8 +56,6 @@ export function accountStatusMeta(status: string): {
       return { label: '需重新登录', type: 'error' }
     case 'need_code':
       return { label: '待验证码', type: 'warning' }
-    case 'need_qr':
-      return { label: '待扫码', type: 'warning' }
     case 'error':
       return { label: '异常', type: 'error' }
     default:

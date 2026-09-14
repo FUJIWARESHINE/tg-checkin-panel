@@ -282,6 +282,25 @@ def main() -> int:
         r = client.get("/api/records")
         check("清理后剩 1 条", r.json().get("total") == 1, r.text[:200])
 
+        print("\n== 记录删除（删除选中 / 清空全部）==")
+        r = client.delete("/api/records", params={"scope": "ids", "ids": "abc"})
+        check("非法 ids 被拒（400）", r.status_code == 400, f"{r.status_code} {r.text[:120]}")
+
+        r = client.delete("/api/records", params={"scope": "ids", "ids": ""})
+        check("未选中任何记录时删除 0 条", r.json().get("deleted") == 0, r.text[:200])
+        check("未选中时记录未被误删", client.get("/api/records").json().get("total") == 1, "")
+
+        r = client.delete("/api/records", params={"scope": "ids", "ids": "999999"})
+        check("删除不存在的 id 返回 0 条", r.json().get("deleted") == 0, r.text[:200])
+
+        selected = [item["id"] for item in client.get("/api/records").json()["items"]]
+        r = client.delete("/api/records", params={"scope": "ids", "ids": ",".join(map(str, selected))})
+        check("删除选中的记录", r.json().get("deleted") == len(selected), r.text[:200])
+        check("选中删除后记录清空", client.get("/api/records").json().get("total") == 0, "")
+
+        r = client.delete("/api/records", params={"scope": "all"})
+        check("清空全部（空库返回 0 条）", r.json().get("deleted") == 0, r.text[:200])
+
         print("\n== 系统 ==")
         r = client.get("/api/system/info")
         info = r.json() if r.status_code == 200 else {}
