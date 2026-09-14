@@ -48,6 +48,9 @@ class RunContext:
     reply_text: str = ""
     task_name: str = ""
     target_id: int | None = None
+    # 本次发送的消息 id 基线：只接受比它更新的来消息，
+    # 避免把「上一条指令」的延迟回复误当成当前步骤的回复
+    since_message_id: int | None = None
     # 执行结果
     outcome: str = "fail"  # success | fail
     outcome_reason: str = ""
@@ -76,6 +79,71 @@ async def _delete_later(raw: TelegramClient, acct: AccountClient, message: Any, 
         logger.debug("删除消息失败（忽略）：%s", exc)
 
 
+def _message_id(message: Any) -> int | None:
+    value = getattr(message, "id", None)
+    return value if isinstance(value, int) else None
+
+
+def _is_stale(ctx: RunContext, message: Any) -> bool:
+    """消息是否早于本次发送（例如上一条指令的延迟回复）。"""
+    if ctx.since_message_id is None:
+        return False
+    msg_id = _message_id(message)
+    return msg_id is not None and msg_id <= ctx.since_message_id
+
+
+async def _mark_baseline(ctx: RunContext, sent: Any) -> None:
+    """记录本次发送的消息 id，并丢弃队列里比它更旧的来消息。
+
+    场景：同一个会话里目标 1 超时后，bot 才把它那条「签到成功」补回来；
+    目标 2 的 wait_reply 会立刻命中这条陈旧回复，导致流程走错分支。
+    以「我们自己发出的那条消息的 id」为分界线即可精准排除。
+    """
+    msg_id = _message_id(sent)
+    if msg_id is None:
+        return
+    ctx.since_message_id = msg_id
+    dropped = 0
+    kept: list[Any] = []
+    while not ctx.inbox.empty():
+        try:
+            item = ctx.inbox.get_nowait()
+        except asyncio.QueueEmpty:  # pragma: no cover - 竞态兜底
+            break
+        item_id = _message_id(item)
+        if item_id is not None and item_id <= msg_id:
+            dropped += 1
+        else:
+            kept.append(item)
+    for item in kept:
+        ctx.inbox.put_nowait(item)
+    if dropped:
+        logger.debug("丢弃 %s 条早于本次发送的陈旧消息（基线 id=%s）", dropped, msg_id)
+
+
+async def _visible_buttons(
+    ctx: RunContext, message: Any, index: int, step_type: str
+) -> list[Any]:
+    """取出消息上可点击的按钮并拍平；没有按钮时返回空列表。"""
+    try:
+        raw = await ctx.acct.call(message.get_buttons)
+    except Exception as exc:  # noqa: BLE001
+        raise StepError(
+            f"读取消息按钮失败：{exc}", step_index=index, step_type=step_type
+        ) from exc
+    flat: list[Any] = []
+    for item in raw or []:
+        if isinstance(item, (list, tuple)):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    return flat
+
+
+def _button_labels(buttons: list[Any]) -> list[str]:
+    return [str(getattr(b, "text", "") or "?") for b in buttons]
+
+
 # ---------------------------------------------------------------- handlers
 
 
@@ -86,6 +154,7 @@ async def h_send_text(ctx: RunContext, step: dict[str, Any], index: int) -> str:
     if ctx.thread_id:
         kwargs["reply_to"] = ctx.thread_id
     ctx.last_sent = await ctx.acct.call(ctx.raw.send_message, ctx.entity, text, **kwargs)
+    await _mark_baseline(ctx, ctx.last_sent)
     if step.get("delay_after"):
         await asyncio.sleep(float(step["delay_after"]))
     if step.get("delete_after"):
@@ -104,6 +173,7 @@ async def h_send_dice(ctx: RunContext, step: dict[str, Any], index: int) -> str:
     ctx.last_sent = await ctx.acct.call(
         ctx.raw.send_message, ctx.entity, file=types.InputMediaDice(emoji), **kwargs
     )
+    await _mark_baseline(ctx, ctx.last_sent)
     if step.get("wait_result"):
         ctx.variables["dice_value"] = getattr(ctx.last_sent, "dice", None) and ctx.last_sent.dice.value
     if step.get("delay_after"):
@@ -122,25 +192,70 @@ async def h_click_button(ctx: RunContext, step: dict[str, Any], index: int) -> s
         raise StepError("没有可点击的消息（请先 wait_reply 或 send_text）", step_index=index, step_type=st)
     text = render_template(str(step.get("text") or ""), ctx.variables) or None
     idx = step.get("index")
+    # Telethon 1.37+ 的 Message.click() 已没有 timeout 参数（只能在外面包一层超时）
+    timeout = float(step.get("timeout") or ctx.step_timeout_sec)
+
+    # 没有按钮时 Telethon 的 click() 会静默返回 None，以前会被记成「已点击按钮」
+    # 但实际什么都没点，这里先自己确认按钮存在，把问题暴露在第 3 步而不是后面的「等待回复超时」。
+    buttons = await _visible_buttons(ctx, message, index, st)
+    if not buttons:
+        raise StepError(
+            f"这条消息上没有可点击的按钮（回复内容：{(ctx.reply_text or '')[:40] or '空'}），"
+            "请检查上一步等待的是哪条回复",
+            step_index=index,
+            step_type=st,
+        )
+
+    if text:
+        # 字符串 text 是「完全相等」匹配，按钮常带 emoji/空格（如「🎯 签到」），
+        # 这里做不区分大小写的包含匹配，并在找不到时把可用按钮列出来。
+        matched = [b for b in buttons if text.lower() in str(getattr(b, "text", "") or "").lower()]
+        if not matched:
+            raise StepError(
+                f"未找到按钮「{text}」，可点击的按钮有：{_button_labels(buttons)}",
+                step_index=index,
+                step_type=st,
+            )
+        target_label = str(getattr(matched[0], "text", "") or text)
+        click_kwargs: dict[str, Any] = {"text": re.compile(re.escape(text), re.IGNORECASE).search}
+    else:
+        i = int(idx or 0)
+        if i >= len(buttons):
+            raise StepError(
+                f"按钮序号 {i} 越界，可点击的按钮有：{_button_labels(buttons)}",
+                step_index=index,
+                step_type=st,
+            )
+        target_label = f"#{i}"
+        click_kwargs = {"i": i}
+
     try:
-        if text:
-            clicked = await ctx.acct.call(
-                message.click, text=text, timeout=float(step.get("timeout") or ctx.step_timeout_sec)
-            )
-        else:
-            clicked = await ctx.acct.call(
-                message.click, i=int(idx or 0), timeout=float(step.get("timeout") or ctx.step_timeout_sec)
-            )
+        clicked = await asyncio.wait_for(
+            ctx.acct.call(message.click, **click_kwargs), timeout=timeout
+        )
     except ValueError as exc:
-        raise StepError(f"未找到指定按钮：{text or idx}（{exc}）", step_index=index, step_type=st) from exc
+        raise StepError(f"未找到指定按钮：{target_label}（{exc}）", step_index=index, step_type=st) from exc
     except asyncio.TimeoutError as exc:
         raise StepTimeout("点击按钮后等待响应超时", step_index=index, step_type=st) from exc
+
+    if clicked is None:
+        # 按钮确实点了（上面已确认存在），只是机器人没回 answer：
+        # 常见于 URL 按钮 / 纯回调按钮，这种情况不算失败，但要提示清楚。
+        logger.warning(
+            "[%s] 步骤 %s 已点击按钮「%s」，但机器人没有返回应答",
+            ctx.task_name,
+            index + 1,
+            target_label,
+        )
+        note = "（机器人未返回应答）"
+    else:
+        note = ""
     if clicked is not None and getattr(clicked, "raw_text", None):
         ctx.reply_message = clicked
         ctx.reply_text = clicked.raw_text or ""
     if step.get("delay_after"):
         await asyncio.sleep(float(step["delay_after"]))
-    return f"已点击按钮：{text or f'#{idx or 0}'}"
+    return f"已点击按钮：{target_label}{note}"
 
 
 async def h_wait_reply(ctx: RunContext, step: dict[str, Any], index: int) -> str:
@@ -165,6 +280,10 @@ async def h_wait_reply(ctx: RunContext, step: dict[str, Any], index: int) -> str
             message = await asyncio.wait_for(ctx.inbox.get(), timeout=remaining)
         except asyncio.TimeoutError as exc:
             raise StepTimeout(f"等待回复超时（{timeout}s）", step_index=index, step_type=st) from exc
+
+        if _is_stale(ctx, message):
+            logger.debug("忽略早于本次发送的陈旧回复 id=%s", _message_id(message))
+            continue
 
         text = (getattr(message, "raw_text", "") or "").strip()
         if not text:
@@ -215,7 +334,22 @@ async def h_ai_choose(ctx: RunContext, step: dict[str, Any], index: int) -> str:
         text = render_template(str(step["reply_text"]), ctx.variables)
         ctx.last_sent = await ctx.acct.call(ctx.raw.send_message, ctx.entity, text)
     elif step.get("click"):
-        await ctx.acct.call(message.click, text=answer, timeout=float(ctx.step_timeout_sec))
+        buttons = await _visible_buttons(ctx, message, index, st)
+        matched = [
+            b for b in buttons if answer.lower() in str(getattr(b, "text", "") or "").lower()
+        ]
+        if not matched:
+            raise StepError(
+                f"未找到选项按钮「{answer}」，可点击的按钮有：{_button_labels(buttons)}",
+                step_index=index,
+                step_type=st,
+            )
+        await asyncio.wait_for(
+            ctx.acct.call(
+                message.click, text=re.compile(re.escape(answer), re.IGNORECASE).search
+            ),
+            timeout=float(ctx.step_timeout_sec),
+        )
     return f"AI 答案：{answer}"
 
 
@@ -304,6 +438,8 @@ async def attach_inbox(ctx: RunContext) -> Any:
             if getattr(message, "out", False) and not ctx.variables.get("_capture_own"):
                 return
             if target_id is not None and getattr(event, "chat_id", None) != target_id:
+                return
+            if _is_stale(ctx, message):
                 return
             await ctx.inbox.put(message)
         except Exception:  # noqa: BLE001

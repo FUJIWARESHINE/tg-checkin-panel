@@ -29,6 +29,22 @@ from .client_pool import TelegramCallError, parse_proxy
 PENDING_TTL = 600  # 10 分钟
 
 
+def qr_expires_at(qr: Any) -> datetime:
+    """把 QRLogin 的过期信息统一换算成带时区的 UTC 时间点。
+
+    注意：Telethon 的 ``QRLogin.expires`` 是 ``datetime``（绝对时间），不是秒数。
+    旧写法 ``timedelta(seconds=getattr(qr, "expires", 60))`` 会在属性存在时抛
+    ``TypeError: unsupported type for timedelta seconds component``。
+    """
+    value = getattr(qr, "expires", None)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    seconds = float(value) if isinstance(value, (int, float)) else 60.0
+    return datetime.now(timezone.utc) + timedelta(seconds=max(1.0, seconds))
+
+
 @dataclass
 class PendingLogin:
     token: str
@@ -205,8 +221,7 @@ class LoginManager:
         item.qr_task = asyncio.create_task(self._qr_waiter(item, qr))
         await self._put(item)
 
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=getattr(qr, "expires", 60))
-        return item, qr.url, expires_at
+        return item, qr.url, qr_expires_at(qr)
 
     async def _qr_waiter(self, item: PendingLogin, qr: Any) -> None:
         try:
