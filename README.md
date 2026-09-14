@@ -8,8 +8,6 @@
 一个 Docker 单容器部署的 **Telegram 自动签到服务**：每天定时用你的个人号给目标机器人发送签到消息，
 带精美 Web 管理界面、可视化拖拽的动作流编辑器、灵活的定时调度和详细的推送通知。
 
-> 参考并改进了 6 个开源方案（amchii/tg-signer、ssfun/tg-sign-plus、Micah123321/tg-signer、
-> bamzest/telegram-auto-checkin、MoonTV-hash/TgAutoCheckin、Zhun-ye/telegram-checkin-bot）。
 
 ---
 
