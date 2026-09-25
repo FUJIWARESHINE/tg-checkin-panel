@@ -26,6 +26,7 @@ CHANNEL_SCHEMA: dict[str, dict[str, object]] = {
             {"key": "bot_token", "label": "Bot Token", "type": "password", "required": True},
             {"key": "chat_id", "label": "Chat ID", "type": "text", "required": True, "placeholder": "123456789"},
             {"key": "api_base", "label": "API 反代地址", "type": "text", "placeholder": "https://api.telegram.org"},
+            {"key": "proxy", "label": "推送代理（可选）", "type": "text", "placeholder": "socks5://127.0.0.1:7890，留空则用全局 TG 代理"},
             {"key": "message_thread_id", "label": "话题 ID（可选）", "type": "text"},
             {"key": "silent", "label": "静默发送", "type": "switch"},
         ],

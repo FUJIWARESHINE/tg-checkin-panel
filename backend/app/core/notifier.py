@@ -90,14 +90,32 @@ class NotifyError(RuntimeError):
     pass
 
 
-async def _post_json(url: str, payload: dict[str, Any], timeout: int = 20) -> dict[str, Any]:
-    async with httpx.AsyncClient(timeout=timeout) as client:
+async def _post_json(
+    url: str, payload: dict[str, Any], timeout: int = 20, proxy: str | None = None
+) -> dict[str, Any]:
+    async with httpx.AsyncClient(timeout=timeout, proxy=proxy) as client:
         resp = await client.post(url, json=payload)
         resp.raise_for_status()
         try:
             return resp.json()
         except ValueError:
             return {"raw": resp.text}
+
+
+def _resolve_http_proxy(cfg: dict[str, Any]) -> str | None:
+    """为 Telegram API 推送解析可用的 httpx 代理。
+
+    优先级：渠道配置里的 proxy 字段 > 全局 settings.tg_proxy。
+    Telethon 支持的 mtproxy 协议 httpx 不支持，遇到时忽略代理直连。
+    """
+    raw = (str(cfg.get("proxy") or "").strip()) or (settings.tg_proxy or "").strip()
+    if not raw:
+        return None
+    scheme = raw.split("://", 1)[0].lower()
+    if scheme not in ("socks5", "socks4", "http", "https"):
+        logger.info("推送代理协议 %r 不被 HTTP 客户端支持，本次推送将直连", scheme)
+        return None
+    return raw
 
 
 async def send_telegram(cfg: dict[str, Any], msg: NotifyMessage) -> str:
@@ -115,7 +133,9 @@ async def send_telegram(cfg: dict[str, Any], msg: NotifyMessage) -> str:
     }
     if cfg.get("message_thread_id"):
         payload["message_thread_id"] = int(cfg["message_thread_id"])
-    data = await _post_json(f"{base}/bot{token}/sendMessage", payload)
+    data = await _post_json(
+        f"{base}/bot{token}/sendMessage", payload, proxy=_resolve_http_proxy(cfg)
+    )
     if not data.get("ok"):
         raise NotifyError(f"Telegram 推送失败：{data.get('description') or data}")
     return "ok"
@@ -386,7 +406,7 @@ async def send_now(view: ChannelView, msg: NotifyMessage) -> tuple[bool, str]:
             await adapter(view.config, msg)
             return True, "ok"
         except Exception as exc:  # noqa: BLE001
-            last_error = str(exc)
+            last_error = str(exc) or exc.__class__.__name__
             logger.warning("渠道 %s 推送失败（第 %s 次）：%s", view.name, attempt, exc)
             await asyncio.sleep(min(2 ** attempt, 8))
     return False, last_error
