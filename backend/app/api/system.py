@@ -81,6 +81,11 @@ async def put_settings(payload: SystemSettingsIn, _: str = Depends(current_user)
     # trigger 都是按任务自己的时区显式构造的，重建 job 即可生效。
     if "timezone" in values:
         await sched.rebuild_all()
+    if "tg_proxy" in values:
+        # 全局代理换了：丢弃所有旧连接，下次 acquire 会用新代理重建。
+        dropped = await pool.drop_stale()
+        if dropped:
+            logger.info("全局代理已变更，已重建 %s 个账号的连接", dropped)
     if "max_concurrent_tasks" in values:
         sched._semaphore = None  # noqa: SLF001 - 触发下次重建信号量
     return OkOut(message="设置已保存并生效")

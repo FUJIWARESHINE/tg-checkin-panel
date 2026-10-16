@@ -212,7 +212,7 @@ tg-checkin-panel/
 ```
 accounts                          # TG 账号
   id, name, phone(脱敏), api_id, api_hash(加密), session_path,
-  proxy, status(offline/online/need_code/need_2fa/error),
+  status(offline/online/need_code/need_2fa/error),
   last_login_at, last_active_at, is_active, created_at
 
 tasks                             # 签到任务

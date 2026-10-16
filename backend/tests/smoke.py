@@ -140,7 +140,6 @@ def main() -> int:
                 "phone": "+8613800000000",
                 "api_id": 123456,
                 "api_hash": "0123456789abcdef0123456789abcdef",
-                "proxy": "",
             },
         )
         check("创建账号", r.status_code == 200 and r.json()["id"] == 1, r.text[:300])

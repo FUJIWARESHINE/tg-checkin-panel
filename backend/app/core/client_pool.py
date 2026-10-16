@@ -60,7 +60,11 @@ def parse_proxy(raw: str | None) -> dict[str, Any] | None:
 
 
 class AccountClient:
-    """单个账号的客户端包装。"""
+    """单个账号的客户端包装。
+
+    代理只来自全局配置 ``settings.tg_proxy``；构建时记下当时的代理串
+    （``proxy_stamp``），供客户端池判断全局代理是否已变更。
+    """
 
     def __init__(
         self,
@@ -70,14 +74,13 @@ class AccountClient:
         *,
         session_path: str,
         session_string: str = "",
-        proxy: str = "",
     ) -> None:
         self.account_id = account_id
         self.api_id = api_id
         self.api_hash = api_hash
         self.session_path = session_path
         self.session_string = session_string
-        self.tz_proxy = proxy
+        self.proxy_stamp = settings.tg_proxy
         self._client: TelegramClient | None = None
         self._start_lock = asyncio.Lock()
         self._call_lock = asyncio.Lock()
@@ -94,7 +97,8 @@ class AccountClient:
 
     def _build(self, start: bool = True) -> TelegramClient:
         session = StringSession(self.session_string) if self.session_string else self.session_path
-        proxy = parse_proxy(self.tz_proxy or settings.tg_proxy)
+        proxy = parse_proxy(settings.tg_proxy)
+        self.proxy_stamp = settings.tg_proxy
         client = TelegramClient(
             session,
             self.api_id,
@@ -194,6 +198,13 @@ class ClientPool:
             self._locks[account_id] = asyncio.Lock()
         return self._locks[account_id]
 
+    async def _teardown(self, account_id: int, client: AccountClient | None) -> None:
+        """摘除并断开一个客户端。调用方必须已持有该账号的锁。"""
+        self._clients.pop(account_id, None)
+        self._meta.pop(account_id, None)
+        if client is not None:
+            await client.stop()
+
     async def acquire(
         self,
         account_id: int,
@@ -202,24 +213,42 @@ class ClientPool:
         *,
         session_path: str,
         session_string: str = "",
-        proxy: str = "",
     ) -> AccountClient:
         async with self._lock(account_id):
             existing = self._clients.get(account_id)
-            if existing is not None:
+            if existing is not None and existing.proxy_stamp == settings.tg_proxy:
                 existing.refs += 1
                 return existing
+            if existing is not None:
+                # 全局代理变了，旧连接必须重建，否则会一直走老代理。
+                # 注意：此处已持有账号锁，不能调 drop()（同锁不可重入，会死锁）。
+                logger.info(
+                    "全局代理已变更（%s -> %s），重建账号 %s 的连接",
+                    existing.proxy_stamp or "直连",
+                    settings.tg_proxy or "直连",
+                    account_id,
+                )
+                await self._teardown(account_id, existing)
             client = AccountClient(
                 account_id,
                 api_id,
                 api_hash,
                 session_path=session_path,
                 session_string=session_string,
-                proxy=proxy,
             )
             client.refs = 1
             self._clients[account_id] = client
             return client
+
+    async def drop_stale(self) -> int:
+        """丢弃所有「构建时代理 ≠ 当前全局代理」的客户端，返回重建数量。
+
+        在保存全局代理设置后调用，让代理改动立即生效，无需重启进程。
+        """
+        stale = [aid for aid, c in self._clients.items() if c.proxy_stamp != settings.tg_proxy]
+        for account_id in stale:
+            await self.drop(account_id)
+        return len(stale)
 
     async def release(self, account_id: int) -> None:
         async with self._lock(account_id):
@@ -234,10 +263,7 @@ class ClientPool:
     async def drop(self, account_id: int) -> None:
         """删除账号或登出时调用，断开并清理。"""
         async with self._lock(account_id):
-            client = self._clients.pop(account_id, None)
-            self._meta.pop(account_id, None)
-            if client is not None:
-                await client.stop()
+            await self._teardown(account_id, self._clients.get(account_id))
 
     def get(self, account_id: int) -> AccountClient | None:
         return self._clients.get(account_id)

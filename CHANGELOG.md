@@ -3,6 +3,26 @@
 本项目的所有重要变更都会记录在此文件。
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.0] - 2026-10-16
+
+### 变更
+
+- **代理配置收敛为「全局唯一」**：删除账号级「独立代理」与通知渠道级「推送代理」两处冗余入口。
+  整个面板现在只有 `TG_PROXY` 一处代理配置（也可在「系统设置 → 全局代理」里改），
+  所有签到连接与 Telegram 推送统一复用它。相应移除 `accounts.proxy` 字段、
+  `AccountCreate.proxy` / `AccountUpdate.proxy` / `AccountOut.proxy`、
+  「新增账号」弹窗里的独立代理输入框，以及账号列表的「代理」列。
+- 旧库里遗留的 `accounts.proxy` 列不再读写（SQLite 的孤儿列，无害），需要的话可手动
+  `ALTER TABLE accounts DROP COLUMN proxy` 清掉。
+
+### 修复
+
+- **改了全局代理却不生效**：客户端池按账号缓存 `TelegramClient`，而代理只在首次建连时读取一次；
+  `release()` 又刻意「保留连接以便复用」，于是保存新代理后旧连接仍在用老代理，
+  只有重启容器才生效。现在 `AccountClient` 会记下建连时的代理串（`proxy_stamp`），
+  保存全局代理时调用 `pool.drop_stale()` 主动断开旧连接，`acquire()` 也会在发现代理变更时
+  自行重建——改完立即生效，无需重启。
+
 ## [1.1.1] - 2026-09-25
 
 ### 修复

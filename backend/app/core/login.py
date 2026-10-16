@@ -79,12 +79,12 @@ class LoginManager:
 
     # ------------------------------------------------------------ 构建
 
-    def build_client(self, api_id: int, api_hash: str, session_path: str, proxy: str) -> TelegramClient:
+    def build_client(self, api_id: int, api_hash: str, session_path: str) -> TelegramClient:
         return TelegramClient(
             session_path,
             api_id,
             api_hash,
-            proxy=parse_proxy(proxy or settings.tg_proxy),
+            proxy=parse_proxy(settings.tg_proxy),
             connection_retries=5,
             retry_delay=2,
             timeout=30,
@@ -103,12 +103,11 @@ class LoginManager:
         api_hash: str,
         session_path: str,
         phone: str,
-        proxy: str = "",
         force_sms: bool = False,
     ) -> PendingLogin:
         if not phone:
             raise TelegramCallError("请填写手机号（含国家区号，例如 +8613800000000）", kind="input")
-        client = self.build_client(api_id, api_hash, session_path, proxy)
+        client = self.build_client(api_id, api_hash, session_path)
         try:
             await client.connect()
         except Exception as exc:  # noqa: BLE001

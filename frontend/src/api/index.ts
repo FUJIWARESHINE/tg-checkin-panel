@@ -29,7 +29,6 @@ export interface Account {
   phone: string
   api_id: number
   api_hash_masked: string
-  proxy: string
   status: string
   is_active: boolean
   me_info: Record<string, any> | null

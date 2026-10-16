@@ -26,3 +26,6 @@ backend/tests/smoke-result.txt
 .vscode/
 .DS_Store
 Thumbs.db
+
+# WorkBuddy 工作区（记忆/临时产物）
+.workbuddy/

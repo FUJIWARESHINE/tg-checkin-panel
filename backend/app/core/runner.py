@@ -181,7 +181,6 @@ async def execute_task(
             api_hash,
             session_path=session_path,
             session_string=session_string,
-            proxy=account.proxy or settings.tg_proxy,
         )
         try:
             raw = await acct.start()

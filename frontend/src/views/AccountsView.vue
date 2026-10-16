@@ -27,7 +27,7 @@ const loading = ref(false)
 
 const createShow = ref(false)
 const creating = ref(false)
-const form = ref({ name: '', phone: '', api_id: null as number | null, api_hash: '', proxy: '' })
+const form = ref({ name: '', phone: '', api_id: null as number | null, api_hash: '' })
 
 const loginShow = ref(false)
 const loginTarget = ref<Account | null>(null)
@@ -49,7 +49,7 @@ async function load() {
 }
 
 function openCreate() {
-  form.value = { name: '', phone: '', api_id: null, api_hash: '', proxy: '' }
+  form.value = { name: '', phone: '', api_id: null, api_hash: '' }
   createShow.value = true
 }
 
@@ -64,8 +64,7 @@ async function submitCreate() {
       name: form.value.name.trim(),
       phone: form.value.phone.trim(),
       api_id: Number(form.value.api_id),
-      api_hash: form.value.api_hash.trim(),
-      proxy: form.value.proxy.trim()
+      api_hash: form.value.api_hash.trim()
     })
     feedback.ok('账号已创建，请继续登录授权')
     createShow.value = false
@@ -155,13 +154,6 @@ const columns: DataTableColumns<Account> = [
   { title: '手机号', key: 'phone', width: 130 },
   { title: 'API ID', key: 'api_id', width: 100 },
   {
-    title: '代理',
-    key: 'proxy',
-    width: 150,
-    ellipsis: { tooltip: true },
-    render: (row) => row.proxy || '全局默认'
-  },
-  {
     title: '状态',
     key: 'status',
     width: 118,
@@ -228,7 +220,7 @@ onMounted(load)
     <n-alert type="info" :show-icon="true">
       <b>api_id / api_hash</b> 需在
       <a href="https://my.telegram.org/apps" target="_blank" rel="noreferrer">my.telegram.org</a>
-      申请；国内网络需配置代理（可在「系统设置」里填全局代理，或在此处给单个账号单独配置）。
+      申请；国内网络需配置代理（在「系统设置」里填一次全局代理即可，所有账号共用）。
     </n-alert>
 
     <n-card class="soft-card" size="small">
@@ -266,9 +258,6 @@ onMounted(load)
         </n-form-item>
         <n-form-item label="手机号（可留空，登录时再填）">
           <n-input v-model:value="form.phone" placeholder="+8613800000000" />
-        </n-form-item>
-        <n-form-item label="独立代理（可留空，使用全局代理）">
-          <n-input v-model:value="form.proxy" placeholder="socks5://127.0.0.1:7890" />
         </n-form-item>
       </n-form>
       <template #footer>

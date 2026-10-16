@@ -34,7 +34,6 @@ class Account(Base):
     api_hash: Mapped[str] = mapped_column(Text, nullable=False)  # 加密存储
     session_path: Mapped[str] = mapped_column(String(255), default="")
     session_string: Mapped[str | None] = mapped_column(Text, default=None)  # 加密存储
-    proxy: Mapped[str] = mapped_column(String(255), default="")
     status: Mapped[str] = mapped_column(String(24), default="offline")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     me_info: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)

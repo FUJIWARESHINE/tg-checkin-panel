@@ -102,13 +102,12 @@ async def _post_json(
             return {"raw": resp.text}
 
 
-def _resolve_http_proxy(cfg: dict[str, Any]) -> str | None:
-    """为 Telegram API 推送解析可用的 httpx 代理。
+def _resolve_http_proxy() -> str | None:
+    """为推送解析 httpx 可用的代理，统一取全局 settings.tg_proxy。
 
-    优先级：渠道配置里的 proxy 字段 > 全局 settings.tg_proxy。
     Telethon 支持的 mtproxy 协议 httpx 不支持，遇到时忽略代理直连。
     """
-    raw = (str(cfg.get("proxy") or "").strip()) or (settings.tg_proxy or "").strip()
+    raw = (settings.tg_proxy or "").strip()
     if not raw:
         return None
     scheme = raw.split("://", 1)[0].lower()
@@ -134,7 +133,7 @@ async def send_telegram(cfg: dict[str, Any], msg: NotifyMessage) -> str:
     if cfg.get("message_thread_id"):
         payload["message_thread_id"] = int(cfg["message_thread_id"])
     data = await _post_json(
-        f"{base}/bot{token}/sendMessage", payload, proxy=_resolve_http_proxy(cfg)
+        f"{base}/bot{token}/sendMessage", payload, proxy=_resolve_http_proxy()
     )
     if not data.get("ok"):
         raise NotifyError(f"Telegram 推送失败：{data.get('description') or data}")

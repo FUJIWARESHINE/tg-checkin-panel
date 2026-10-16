@@ -47,7 +47,6 @@ def _to_out(account: Account) -> AccountOut:
         phone=mask_phone(account.phone),
         api_id=account.api_id,
         api_hash_masked="********",
-        proxy=account.proxy or "",
         status=account.status,
         is_active=account.is_active,
         me_info=account.me_info,
@@ -82,7 +81,6 @@ async def create_account(payload: AccountCreate, _: str = Depends(current_user))
             phone=payload.phone,
             api_id=payload.api_id,
             api_hash=encrypt(payload.api_hash) or "",
-            proxy=payload.proxy or "",
             session_string=encrypt(payload.session_string) or None,
             status="offline",
         )
@@ -107,8 +105,6 @@ async def update_account(
             account.name = payload.name
         if payload.phone is not None:
             account.phone = payload.phone
-        if payload.proxy is not None:
-            account.proxy = payload.proxy
         if payload.is_active is not None:
             account.is_active = payload.is_active
         await session.flush()
@@ -158,7 +154,6 @@ async def send_code(
             api_hash=api_hash,
             session_path=account.session_path or session_path_for(account_id),
             phone=phone,
-            proxy=account.proxy or settings.tg_proxy,
             force_sms=payload.force_sms,
         )
     except TelegramCallError as exc:
@@ -232,7 +227,6 @@ async def logout_account(account_id: int, _: str = Depends(current_user)) -> OkO
             api_hash,
             session_path=account.session_path or session_path_for(account_id),
             session_string=decrypt(account.session_string) or "",
-            proxy=account.proxy or settings.tg_proxy,
         )
         raw = await acct.start()
         await acct.call(raw.log_out)
@@ -269,7 +263,6 @@ async def check_account(account_id: int, _: str = Depends(current_user)) -> OkOu
             api_hash,
             session_path=account.session_path or session_path_for(account_id),
             session_string=decrypt(account.session_string) or "",
-            proxy=account.proxy or settings.tg_proxy,
         )
         raw = await acct.start()
         me = await acct.call(raw.get_me)
@@ -306,7 +299,6 @@ async def list_dialogs(
             api_hash,
             session_path=account.session_path or session_path_for(account_id),
             session_string=decrypt(account.session_string) or "",
-            proxy=account.proxy or settings.tg_proxy,
         )
         raw = await acct.start()
         dialogs = await acct.call(raw.get_dialogs, limit=min(limit, 500))

@@ -66,14 +66,12 @@ class AccountCreate(BaseModel):
     phone: str = Field(default="", max_length=32)
     api_id: int
     api_hash: str = Field(min_length=8)
-    proxy: str = ""
     session_string: str = ""
 
 
 class AccountUpdate(BaseModel):
     name: str | None = None
     phone: str | None = None
-    proxy: str | None = None
     is_active: bool | None = None
 
 
@@ -85,7 +83,6 @@ class AccountOut(BaseModel):
     phone: str
     api_id: int
     api_hash_masked: str
-    proxy: str
     status: str
     is_active: bool
     me_info: dict[str, Any] | None = None
