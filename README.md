@@ -89,6 +89,7 @@
 mkdir tg-checkin-panel && cd tg-checkin-panel
 
 # 下载编排文件与环境变量模板
+#   GHCR 版：docker-compose.ghcr.yml      Docker Hub 版：docker-compose.dockerhub.yml
 curl -O https://raw.githubusercontent.com/FUJIWARESHINE/tg-checkin-panel/main/docker-compose.ghcr.yml
 curl -o .env https://raw.githubusercontent.com/FUJIWARESHINE/tg-checkin-panel/main/.env.example
 
@@ -232,11 +233,17 @@ docker compose up -d --build --force-recreate   # 改代码后重建
 
 ## 🔄 镜像与自动发布
 
-镜像发布在 GitHub Container Registry（GHCR），**无需配置任何 Secret**，靠仓库自带的 `GITHUB_TOKEN` 推送。
+镜像同时发布到 **GitHub Container Registry（GHCR）** 与 **Docker Hub**（同一份多架构镜像、同一套标签），可任选其一拉取：
 
 ```bash
+# GitHub Container Registry（无需任何配置，靠仓库自带的 GITHUB_TOKEN 推送）
 docker pull ghcr.io/fujiwareshine/tg-checkin-panel:latest
+
+# Docker Hub（需在仓库 Secrets 里配一次 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN）
+docker pull docker.io/fujiwareshine/tg-checkin-panel:latest
 ```
+
+> Docker Hub 未配置 Secret 时，工作流会自动跳过 Docker Hub，只推 GHCR，**不会让流水线失败**。
 
 ### 标签规则
 
@@ -246,7 +253,18 @@ docker pull ghcr.io/fujiwareshine/tg-checkin-panel:latest
 | 推送到 `main` 分支 | `edge`、`sha-xxxxxxx` | 最新开发版，不动 `latest` |
 | 手动运行工作流 | `edge`、`sha-xxxxxxx` | 可勾选是否推送 |
 
-镜像同时支持 `linux/amd64` 与 `linux/arm64`（群晖 / 树莓派 / Apple Silicon 可直接用）。
+镜像同时支持 `linux/amd64` 与 `linux/arm64`（群晖 / 树莓派 / Apple Silicon 可直接用），两个仓库的标签完全一致。
+
+### 启用 Docker Hub 推送（一次性）
+
+在仓库 **Settings → Secrets and variables → Actions** 添加两个 Secret：
+
+| Secret | 值 |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名（如 `fujiwareshine`） |
+| `DOCKERHUB_TOKEN` | Docker Hub **Access Token**（hub.docker.com → Account settings → Personal access tokens，权限选 Read & Write） |
+
+配好后下一次构建就会同时推 `docker.io/<用户名>/tg-checkin-panel:<标签>`；想立即验证可在 Actions 里手动运行「镜像构建与发布」。
 
 ### 发新版本（三步）
 
@@ -267,8 +285,8 @@ git push origin v1.1.0
 
 推完 tag 后，GitHub Actions 会自动：
 
-1. **校验** —— 检查 `VERSION` 文件与 tag 是否一致、跑后端冒烟测试、构建前端（任一失败则不出镜像）
-2. **构建** —— 多架构镜像推送到 GHCR，打上 `1.1.0` / `1.1` / `1` / `latest`
+1. **校验** —— 检查 `VERSION` 文件与 tag 是否一致、跑后端冒烟测试、前端类型检查与构建（任一失败则不出镜像）
+2. **构建** —— `linux/amd64` + `linux/arm64` 双架构镜像推送到 GHCR 与 Docker Hub，打上 `1.1.0` / `1.1` / `1` / `latest`
 3. **发布** —— 创建 GitHub Release，附自动生成的变更说明
 
 进度和结果都在仓库的 **Actions** 页查看。
@@ -361,7 +379,8 @@ TG自动签到面板/
 │   └── dependabot.yml         # 依赖自动更新
 ├── Dockerfile                 # 多阶段构建
 ├── docker-compose.yml         # 源码构建部署
-├── docker-compose.ghcr.yml    # 直接拉取官方镜像部署
+├── docker-compose.ghcr.yml    # 直接拉取 GHCR 镜像部署
+├── docker-compose.dockerhub.yml # 直接拉取 Docker Hub 镜像部署
 ├── VERSION                    # 版本号（发版时改这里）
 ├── CHANGELOG.md
 ├── .env.example

@@ -1,0 +1,41 @@
+# 直接从 Docker Hub 拉取自动构建好的镜像（国内拉取通常比 GHCR 更快）
+#
+#   docker compose -f docker-compose.dockerhub.yml pull
+#   docker compose -f docker-compose.dockerhub.yml up -d
+#
+# 升级到最新版：
+#   docker compose -f docker-compose.dockerhub.yml pull && docker compose -f docker-compose.dockerhub.yml up -d
+#
+# 固定某个版本（避免 latest 变动）：
+#   TG_IMAGE_TAG=1.0.0 docker compose -f docker-compose.dockerhub.yml up -d
+services:
+  tg-checkin-panel:
+    image: docker.io/fujiwareshine/tg-checkin-panel:${TG_IMAGE_TAG:-latest}
+    container_name: tg-checkin-panel
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin123}
+      SECRET_KEY: ${SECRET_KEY:-}
+      MASTER_KEY: ${MASTER_KEY:-}
+      TG_PROXY: ${TG_PROXY:-}
+      DEBUG: ${DEBUG:-false}
+    extra_hosts:
+      # Linux 上让容器能通过 host.docker.internal 访问宿主机代理
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 6s
+      retries: 3
+      start_period: 25s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

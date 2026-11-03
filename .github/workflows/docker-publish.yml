@@ -1,9 +1,14 @@
-name: Docker 镜像构建与发布
+name: 镜像构建与发布（GHCR + Docker Hub）
 
 # 触发时机：
-#   1. 推送版本 tag（形如 v1.2.3）→ 构建多架构镜像 + 打版本号标签 + 打 latest + 创建 GitHub Release
-#   2. 推送到 main 分支          → 构建并打 edge 标签（最新开发版，不覆盖 latest）
-#   3. 手动触发                  → 可选是否推送
+#   1. 推送到 main        → 构建 amd64 + arm64 双架构镜像，打 edge / sha-<短SHA> 标签（不动 latest）
+#   2. 推送版本 tag（v*）  → 同上，另加 1.2.3 / 1.2 / 1 与 latest，并创建 GitHub Release
+#   3. 手动触发            → 可选是否推送镜像
+#
+# 推送目标：
+#   - GitHub Container Registry：ghcr.io/<owner>/<repo>（用内置 GITHUB_TOKEN，永远可用）
+#   - Docker Hub：docker.io/<DOCKERHUB_USERNAME>/<repo>（需仓库 Secrets 配 DOCKERHUB_USERNAME + DOCKERHUB_TOKEN；
+#     没配时自动跳过 Docker Hub，只推 GHCR，不会让流水线失败）
 on:
   push:
     branches: [main]
@@ -11,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       push_image:
-        description: 是否推送镜像到 GHCR（取消勾选则只构建不推送）
+        description: 是否推送镜像（取消勾选则只构建不推送）
         type: boolean
         default: true
 
@@ -20,13 +25,12 @@ concurrency:
   group: docker-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  REGISTRY: ghcr.io
-  # 自动使用 owner/repo，无需手写用户名
-  IMAGE_NAME: ${{ github.repository }}
-
 permissions:
   contents: read
+
+env:
+  REGISTRY_GHCR: ghcr.io
+  PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   # ------------------------------------------------------------------
@@ -74,15 +78,19 @@ jobs:
         working-directory: frontend
         run: npm ci --no-audit --no-fund
 
+      - name: 前端类型检查
+        working-directory: frontend
+        run: npm run typecheck
+
       - name: 前端生产构建
         working-directory: frontend
         run: npm run build
 
   # ------------------------------------------------------------------
-  # 第二关：构建多架构镜像并推送 GHCR
+  # 第二关：构建 amd64 + arm64 双架构镜像，同时推 GHCR 与 Docker Hub
   # ------------------------------------------------------------------
   build:
-    name: 构建并推送镜像
+    name: 构建双架构镜像并推送
     needs: [verify]
     runs-on: ubuntu-latest
     permissions:
@@ -91,6 +99,12 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.value }}
       digest: ${{ steps.build.outputs.digest }}
+      dockerhub: ${{ steps.targets.outputs.dockerhub }}
+      dockerhub_image: ${{ steps.targets.outputs.dockerhub_image }}
+      ghcr_image: ${{ steps.targets.outputs.ghcr_image }}
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -104,8 +118,41 @@ jobs:
             echo "value=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: 解析推送目标
+        id: targets
+        run: |
+          # 镜像名必须全小写，否则 docker pull 会报 invalid reference format
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          repo="${repo,,}"
+          hub_user="${DOCKERHUB_USERNAME:-$owner}"
+          ghcr_image="${REGISTRY_GHCR}/${owner}/${repo}"
+          hub_image="docker.io/${hub_user}/${repo}"
+
+          if [ -n "${DOCKERHUB_TOKEN}" ]; then
+            images="${ghcr_image}"$'\n'"${hub_image}"
+            echo "dockerhub=true" >> "$GITHUB_OUTPUT"
+            echo "推送目标：GHCR + Docker Hub（${hub_image}）"
+          else
+            images="${ghcr_image}"
+            echo "dockerhub=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Docker Hub 未启用::未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，本次只推 GHCR"
+          fi
+
+          {
+            echo "ghcr_image=${ghcr_image}"
+            echo "hub_image=${hub_image}"
+            echo "hub_user=${hub_user}"
+            echo "dockerhub_image=${hub_image}"
+            echo "images<<IMAGES_EOF"
+            echo "${images}"
+            echo "IMAGES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: 设置 QEMU（构建 arm64 镜像用）
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: 设置 Buildx
         uses: docker/setup-buildx-action@v3
@@ -113,15 +160,23 @@ jobs:
       - name: 登录 GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ${{ env.REGISTRY_GHCR }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 登录 Docker Hub
+        if: steps.targets.outputs.dockerhub == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ steps.targets.outputs.hub_user }}
+          password: ${{ env.DOCKERHUB_TOKEN }}
 
       - name: 生成镜像标签与元数据
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ steps.targets.outputs.images }}
           tags: |
             # v1.2.3 -> 1.2.3
             type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
@@ -140,13 +195,13 @@ jobs:
             org.opencontainers.image.description=Telegram 自动签到 + 可视化 Web 面板（单容器部署）
             org.opencontainers.image.version=${{ steps.version.outputs.value }}
 
-      - name: 构建并推送
+      - name: 构建并推送（linux/amd64 + linux/arm64）
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.PLATFORMS }}
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -161,26 +216,40 @@ jobs:
           sbom: true
 
       - name: 写入构建摘要
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION_VALUE: ${{ steps.version.outputs.value }}
+          GHCR_IMAGE: ${{ steps.targets.outputs.ghcr_image }}
+          HUB_IMAGE: ${{ steps.targets.outputs.hub_image }}
+          DOCKERHUB_ON: ${{ steps.targets.outputs.dockerhub }}
         run: |
           {
             echo "## 🐳 镜像构建完成"
             echo ""
             echo "| 项目 | 值 |"
             echo "|---|---|"
-            echo "| 版本 | \`${{ steps.version.outputs.value }}\` |"
-            echo "| 平台 | \`linux/amd64\`, \`linux/arm64\` |"
-            echo "| Digest | \`${{ steps.build.outputs.digest }}\` |"
+            echo "| 版本 | \`${VERSION_VALUE}\` |"
+            echo "| 架构 | \`linux/amd64\`, \`linux/arm64\` |"
+            echo "| Digest | \`${DIGEST}\` |"
+            echo "| Docker Hub | $([ "$DOCKERHUB_ON" = "true" ] && echo '✅ 已推送' || echo '⏭ 未配置 Secrets，本次跳过') |"
             echo ""
             echo "### 镜像标签"
             echo ""
             echo '```'
-            echo "${{ steps.meta.outputs.tags }}"
+            echo "${TAGS}"
             echo '```'
             echo ""
             echo "### 拉取方式"
             echo ""
             echo '```bash'
-            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.value }}"
+            echo "# GitHub Container Registry"
+            echo "docker pull ${GHCR_IMAGE}:${VERSION_VALUE}"
+            if [ "$DOCKERHUB_ON" = "true" ]; then
+              echo ""
+              echo "# Docker Hub"
+              echo "docker pull ${HUB_IMAGE}:${VERSION_VALUE}"
+            fi
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -201,32 +270,51 @@ jobs:
           fetch-depth: 0
 
       - name: 创建 Release 并附带自动生成的变更说明
+        env:
+          GHCR_IMAGE: ${{ needs.build.outputs.ghcr_image }}
+          HUB_IMAGE: ${{ needs.build.outputs.dockerhub_image }}
+          HUB_ON: ${{ needs.build.outputs.dockerhub }}
+          VERSION_VALUE: ${{ needs.build.outputs.version }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          body="${RUNNER_TEMP}/release-body.md"
+          {
+            echo "## 🐳 Docker 镜像（linux/amd64 + linux/arm64）"
+            echo ""
+            echo "### GitHub Container Registry"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${GHCR_IMAGE}:${TAG_NAME}"
+            echo '```'
+            if [ "$HUB_ON" = "true" ]; then
+              echo ""
+              echo "### Docker Hub"
+              echo ""
+              echo '```bash'
+              echo "docker pull ${HUB_IMAGE}:${TAG_NAME}"
+              echo '```'
+            fi
+            echo ""
+            echo "同时提供 \`latest\` 与 \`${VERSION_VALUE}\` 标签。"
+            echo ""
+            echo "| 项目 | 值 |"
+            echo "|---|---|"
+            echo "| 支持架构 | \`linux/amd64\`、\`linux/arm64\` |"
+            echo "| Digest | \`${DIGEST}\` |"
+            echo ""
+            echo "## 🚀 升级到本版本"
+            echo ""
+            echo '```bash'
+            echo "docker compose -f docker-compose.ghcr.yml pull"
+            echo "docker compose -f docker-compose.ghcr.yml up -d"
+            echo '```'
+            echo ""
+            echo "> 数据都挂在 \`./data\` 卷里，升级不会丢数据。"
+          } > "$body"
+
+      - name: 发布 Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          body: |
-            ## 🐳 Docker 镜像
-
-            ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ```
-
-            同时提供 `latest` 与 `${{ needs.build.outputs.version }}` 两个标签。
-
-            | 项目 | 值 |
-            |---|---|
-            | 支持架构 | `linux/amd64`、`linux/arm64` |
-            | Digest | `${{ needs.build.outputs.digest }}` |
-
-            ## 🚀 升级到本版本
-
-            ```bash
-            # 方式一：compose 拉取镜像
-            docker compose -f docker-compose.ghcr.yml pull
-            docker compose -f docker-compose.ghcr.yml up -d
-
-            # 方式二：直接用镜像运行
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ```
-
-            > 数据都挂在 `./data` 卷里，升级不会丢数据。
+          body_path: ${{ runner.temp }}/release-body.md

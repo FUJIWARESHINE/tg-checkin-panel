@@ -19,6 +19,16 @@
 
 - 老库首次启动会自动给 `tasks` 补 `account_ids` 列，并用原 `account_id` 回填，无需手动迁移。
 
+### 变更（仓库与流水线）
+
+- **镜像改为 GHCR + Docker Hub 双仓库发布**：一次构建同时推送到 `ghcr.io` 与 `docker.io`，
+  均为 `linux/amd64` + `linux/arm64` 双架构、标签完全一致。
+  - Docker Hub 凭据走仓库 Secrets（`DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN`），未配置时自动跳过、不阻断构建。
+  - 新增 `docker-compose.dockerhub.yml`，一条命令即可用 Docker Hub 镜像部署。
+- **流水线重构**：校验关增加前端类型检查（`vue-tsc`）；构建关输出「双仓库 × 双架构」摘要；
+  Release 正文同时给出两个仓库的拉取命令。
+- **移除 Dependabot 配置**：不再自动产生依赖升级分支，仓库只保留 `main` 一个分支。
+
 ## [1.2.0] - 2026-10-16
 
 ### 变更
