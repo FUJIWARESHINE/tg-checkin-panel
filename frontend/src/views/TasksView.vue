@@ -141,7 +141,13 @@ const columns: DataTableColumns<Task> = [
         ].filter(Boolean) as any
       )
   },
-  { title: '账号', key: 'account_name', width: 110, ellipsis: { tooltip: true } },
+  {
+    title: '账号',
+    key: 'account_names',
+    width: 140,
+    ellipsis: { tooltip: true },
+    render: (row) => accountText(row)
+  },
   {
     title: '签到目标',
     key: 'targets',
@@ -195,7 +201,7 @@ const columns: DataTableColumns<Task> = [
         default: () => [
           h(
             NButton,
-            { size: 'tiny', type: 'primary', loading: runningId === row.id, onClick: () => runNow(row) },
+            { size: 'tiny', type: 'primary', loading: runningId.value === row.id, onClick: () => runNow(row) },
             { default: () => '立即执行' }
           ),
           h(NButton, { size: 'tiny', onClick: () => openDetail(row) }, { default: () => '详情' }),
@@ -219,6 +225,11 @@ const columns: DataTableColumns<Task> = [
       })
   }
 ]
+
+function accountText(task: Task): string {
+  const names = (task.account_names?.length ? task.account_names : [task.account_name]).filter(Boolean)
+  return names.length ? names.join('、') : '—'
+}
 
 const templateColumns: DataTableColumns<TaskTemplate> = [
   { title: '模板名称', key: 'name', minWidth: 160 },
@@ -314,7 +325,10 @@ onMounted(load)
     >
       <n-descriptions v-if="detailTask" :column="2" label-placement="top" bordered size="small">
         <n-descriptions-item label="任务名">{{ detailTask.name }}</n-descriptions-item>
-        <n-descriptions-item label="账号">{{ detailTask.account_name }}</n-descriptions-item>
+        <n-descriptions-item label="执行账号">
+          {{ accountText(detailTask) }}
+          <span style="opacity: 0.55">（{{ detailTask.account_ids?.length || 1 }} 个）</span>
+        </n-descriptions-item>
         <n-descriptions-item label="调度">
           {{ detailTask.schedule_text }}（{{ detailTask.schedule_type }}: {{ detailTask.schedule_value }}）
         </n-descriptions-item>

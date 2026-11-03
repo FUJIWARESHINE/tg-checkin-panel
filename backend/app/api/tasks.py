@@ -35,11 +35,24 @@ from .deps import current_user
 router = APIRouter(prefix="/api", tags=["tasks"])
 
 
-def _to_out(task: Task, account_name: str = "") -> TaskOut:
+def _task_account_ids(task: Task) -> list[int]:
+    """任务绑定的执行账号；老数据（account_ids 为空）回落到主账号。"""
+    ids = [int(i) for i in (task.account_ids or [])]
+    if not ids and task.account_id:
+        ids = [int(task.account_id)]
+    return ids
+
+
+def _to_out(task: Task, accounts: dict[int, str] | None = None) -> TaskOut:
+    names_map = accounts or {}
+    ids = _task_account_ids(task)
+    names = [names_map.get(i, "") for i in ids]
     data = TaskOut.model_validate(
         {
             **{c.name: getattr(task, c.name) for c in task.__table__.columns},
-            "account_name": account_name,
+            "account_ids": ids,
+            "account_name": names[0] if names else "",
+            "account_names": names,
         }
     )
     tz_name = task.timezone or settings.tz
@@ -51,10 +64,20 @@ def _to_out(task: Task, account_name: str = "") -> TaskOut:
     return data
 
 
-async def _account_name(account_id: int) -> str:
-    async with session_scope() as session:
-        account = await session.get(Account, account_id)
-        return account.name if account else ""
+async def _accounts_map(session, account_ids: list[int]) -> dict[int, str]:
+    """校验账号是否存在，返回 id → 昵称。缺失时直接 400，避免任务存成死链。"""
+    ids = [int(i) for i in account_ids]
+    if not ids:
+        raise HTTPException(status_code=400, detail="请至少选择一个执行账号")
+    rows = (await session.execute(select(Account).where(Account.id.in_(ids)))).scalars().all()
+    found = {a.id: a.name for a in rows}
+    missing = [i for i in ids if i not in found]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail="所选账号不存在：" + "、".join(f"#{i}" for i in missing),
+        )
+    return found
 
 
 @router.get("/tasks", response_model=list[TaskOut])
@@ -62,7 +85,7 @@ async def list_tasks(_: str = Depends(current_user)) -> list[TaskOut]:
     async with session_scope() as session:
         tasks = (await session.execute(select(Task).order_by(Task.id))).scalars().all()
         accounts = {a.id: a.name for a in (await session.execute(select(Account))).scalars().all()}
-        return [_to_out(t, accounts.get(t.account_id, "")) for t in tasks]
+        return [_to_out(t, accounts) for t in tasks]
 
 
 @router.get("/tasks/{task_id}", response_model=TaskOut)
@@ -71,24 +94,23 @@ async def get_task(task_id: int, _: str = Depends(current_user)) -> TaskOut:
         task = await session.get(Task, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="任务不存在")
-        account = await session.get(Account, task.account_id)
-        return _to_out(task, account.name if account else "")
+        accounts = {
+            a.id: a.name for a in (await session.execute(select(Account))).scalars().all()
+        }
+        return _to_out(task, accounts)
 
 
 @router.post("/tasks", response_model=TaskOut)
 async def create_task(payload: TaskCreate, _: str = Depends(current_user)) -> TaskOut:
     async with session_scope() as session:
-        account = await session.get(Account, payload.account_id)
-        if account is None:
-            raise HTTPException(status_code=400, detail="所选账号不存在")
+        accounts = await _accounts_map(session, payload.account_ids)
         task = Task(**payload.model_dump())
         session.add(task)
         await session.flush()
-        await session.flush()
         session.expunge(task)
     sched.schedule_task(task)
-    logger.info("新增任务：%s", task.name)
-    return _to_out(task, account.name)
+    logger.info("新增任务：%s（%s 个账号）", task.name, len(task.account_ids or []))
+    return _to_out(task, accounts)
 
 
 @router.put("/tasks/{task_id}", response_model=TaskOut)
@@ -97,17 +119,15 @@ async def update_task(task_id: int, payload: TaskUpdate, _: str = Depends(curren
         task = await session.get(Task, task_id)
         if task is None:
             raise HTTPException(status_code=404, detail="任务不存在")
-        account = await session.get(Account, payload.account_id)
-        if account is None:
-            raise HTTPException(status_code=400, detail="所选账号不存在")
+        accounts = await _accounts_map(session, payload.account_ids)
         for key, value in payload.model_dump().items():
             setattr(task, key, value)
         await session.flush()
         session.expunge(task)
     sched.remove_task(task_id)
     sched.schedule_task(task)
-    logger.info("更新任务：%s", task.name)
-    return _to_out(task, account.name)
+    logger.info("更新任务：%s（%s 个账号）", task.name, len(task.account_ids or []))
+    return _to_out(task, accounts)
 
 
 @router.delete("/tasks/{task_id}", response_model=OkOut)
@@ -130,13 +150,15 @@ async def toggle_task(task_id: int, payload: TaskToggleIn, _: str = Depends(curr
         if task is None:
             raise HTTPException(status_code=404, detail="任务不存在")
         task.enabled = payload.enabled
-        account = await session.get(Account, task.account_id)
+        accounts = {
+            a.id: a.name for a in (await session.execute(select(Account))).scalars().all()
+        }
         await session.flush()
         session.expunge(task)
     sched.remove_task(task_id)
     if task.enabled:
         sched.schedule_task(task)
-    return _to_out(task, account.name if account else "")
+    return _to_out(task, accounts)
 
 
 @router.post("/tasks/{task_id}/run", response_model=OkOut)

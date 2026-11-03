@@ -37,12 +37,23 @@ def _tz(task: Task) -> str:
     return task.timezone or settings.tz
 
 
-async def _run_job(task_id: int, trigger: str = "schedule", attempt: int = 1) -> None:
+async def _run_job(
+    task_id: int,
+    trigger: str = "schedule",
+    attempt: int = 1,
+    account_ids: list[int] | None = None,
+) -> None:
     from . import runner
 
     async with _sem():
         try:
-            await runner.execute_task(task_id, trigger=trigger, force=(trigger != "catchup"), attempt=attempt)
+            await runner.execute_task(
+                task_id,
+                trigger=trigger,
+                force=(trigger != "catchup"),
+                attempt=attempt,
+                only_accounts=account_ids,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("任务 %s 调度执行异常：%s", task_id, exc)
             await _notify_scheduler_error(task_id, str(exc))
@@ -57,7 +68,13 @@ async def _notify_scheduler_error(task_id: int, error: str) -> None:
             task = await session.get(Task, task_id)
             if task is None:
                 return
-            account = await session.get(Account, task.account_id)
+            account = None
+            for account_id in [task.account_id, *(task.account_ids or [])]:
+                if not account_id:
+                    continue
+                account = await session.get(Account, account_id)
+                if account is not None:
+                    break
             channel_ids = list(task.notify_channel_ids or [])
             if not channel_ids:
                 return
@@ -118,7 +135,9 @@ def schedule_task(task: Task) -> bool:
     return True
 
 
-def schedule_retry(task_id: int, delay_sec: int, attempt: int) -> None:
+def schedule_retry(
+    task_id: int, delay_sec: int, attempt: int, account_ids: list[int] | None = None
+) -> None:
     rid = f"retry:{task_id}"
     try:
         scheduler.remove_job(rid)
@@ -129,7 +148,12 @@ def schedule_retry(task_id: int, delay_sec: int, attempt: int) -> None:
         trigger=DateTrigger(run_date=datetime.now(timezone.utc) + timedelta(seconds=delay_sec)),
         id=rid,
         name=f"retry-{task_id}",
-        kwargs={"task_id": task_id, "trigger": "retry", "attempt": attempt},
+        kwargs={
+            "task_id": task_id,
+            "trigger": "retry",
+            "attempt": attempt,
+            "account_ids": list(account_ids or []),
+        },
         max_instances=1,
         replace_existing=True,
     )
@@ -185,10 +209,14 @@ async def catch_up() -> list[str]:
 
     for task_id, name in pending:
         try:
-            if await runner._already_succeeded_today(task_id, settings.tz):  # noqa: SLF001
+            # 多账号任务：只补今天还没成功的账号
+            todo = await runner.pending_accounts_today(task_id, settings.tz)
+            if not todo:
                 continue
-            logger.info("补跑任务：%s", name)
-            await runner.execute_task(task_id, trigger="catchup", force=True)
+            logger.info("补跑任务：%s（%s 个账号待执行）", name, len(todo))
+            await runner.execute_task(
+                task_id, trigger="catchup", force=False, only_accounts=todo
+            )
             done.append(name)
         except Exception as exc:  # noqa: BLE001
             logger.warning("补跑任务 %s 失败：%s", name, exc)

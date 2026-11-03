@@ -71,8 +71,12 @@ export interface Task {
   id: number
   name: string
   remark: string
+  /** 主账号（兼容字段，等于 account_ids[0]） */
   account_id: number
+  /** 全部执行账号，一个任务可同时用多个账号签到 */
+  account_ids: number[]
   account_name: string
+  account_names: string[]
   template_id: number | null
   targets: Target[]
   action_flow: ActionStep[]

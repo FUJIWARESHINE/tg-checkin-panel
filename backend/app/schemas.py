@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .utils.cron import ScheduleError, to_cron_expression
 
@@ -176,7 +176,9 @@ class TargetIn(BaseModel):
 class TaskBase(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     remark: str = ""
-    account_id: int
+    # account_id 为兼容旧客户端保留；真正的执行账号列表是 account_ids（可多选）
+    account_id: int | None = None
+    account_ids: list[int] = Field(default_factory=list)
     template_id: int | None = None
     targets: list[TargetIn] = Field(default_factory=list)
     action_flow: list[dict[str, Any]] = Field(default_factory=list)
@@ -223,6 +225,24 @@ class TaskBase(BaseModel):
             raise ValueError(f"未知事件类型：{bad}")
         return value
 
+    @model_validator(mode="after")
+    def _normalize_accounts(self) -> "TaskBase":
+        """统一成 account_ids：老客户端只传 account_id，新客户端传多账号列表。"""
+        ordered: list[int] = []
+        for value in list(self.account_ids or []) + ([self.account_id] if self.account_id else []):
+            try:
+                account_id = int(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"账号 id 不合法：{value}") from None
+            if account_id not in ordered:
+                ordered.append(account_id)
+        # 前端按选择顺序传 account_ids，account_id 只作为兜底，不抢占顺序
+        if not ordered:
+            raise ValueError("请至少选择一个执行账号")
+        self.account_ids = ordered
+        self.account_id = ordered[0]
+        return self
+
 
 class TaskCreate(TaskBase):
     pass
@@ -239,7 +259,9 @@ class TaskOut(BaseModel):
     name: str
     remark: str
     account_id: int
+    account_ids: list[int] = []
     account_name: str = ""
+    account_names: list[str] = []
     template_id: int | None = None
     targets: list[dict[str, Any]] = []
     action_flow: list[dict[str, Any]] = []

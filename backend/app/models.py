@@ -69,7 +69,10 @@ class Task(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     remark: Mapped[str] = mapped_column(String(255), default="")
+    # 主账号（兼容旧数据 / 级联删除基准）
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"))
+    # 完整执行账号列表，一个任务可以同时用多个账号签到同一个目标
+    account_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
     template_id: Mapped[int | None] = mapped_column(
         ForeignKey("task_templates.id", ondelete="SET NULL"), default=None
     )

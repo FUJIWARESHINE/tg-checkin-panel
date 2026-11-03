@@ -57,7 +57,7 @@ const saving = ref(false)
 const form = ref({
   name: '',
   remark: '',
-  account_id: null as number | null,
+  account_ids: [] as number[],
   template_id: null as number | null,
   targets: [] as Target[],
   action_flow: [] as ActionStep[],
@@ -118,7 +118,7 @@ async function load() {
       form.value = {
         name: task.name,
         remark: task.remark,
-        account_id: task.account_id,
+        account_ids: task.account_ids?.length ? [...task.account_ids] : [task.account_id],
         template_id: task.template_id,
         targets: (task.targets || []).map((t) => ({ ...t })),
         action_flow: (task.action_flow || []).map((s) => ({ ...s })),
@@ -136,7 +136,7 @@ async function load() {
       }
       keywordsText.value = (task.success_rule?.keywords || []).join('\n')
     } else {
-      if (accs.length === 1) form.value.account_id = accs[0].id
+      if (accs.length === 1) form.value.account_ids = [accs[0].id]
       form.value.action_flow = defaultFlow()
     }
     await refreshPreview()
@@ -182,7 +182,8 @@ function removeTarget(index: number) {
 }
 
 async function openDialogs() {
-  if (!form.value.account_id) {
+  const primary = form.value.account_ids[0]
+  if (!primary) {
     feedback.warn('请先选择账号')
     return
   }
@@ -190,7 +191,7 @@ async function openDialogs() {
   dialogsLoading.value = true
   dialogs.value = []
   try {
-    dialogs.value = await accountApi.dialogs(form.value.account_id)
+    dialogs.value = await accountApi.dialogs(primary)
   } catch (error) {
     feedback.error(extractError(error))
   } finally {
@@ -224,8 +225,8 @@ async function save(runAfter = false) {
     feedback.warn('请填写任务名称')
     return
   }
-  if (!form.value.account_id) {
-    feedback.warn('请选择执行账号')
+  if (!form.value.account_ids.length) {
+    feedback.warn('请至少选择一个执行账号')
     return
   }
   if (!form.value.targets.length) {
@@ -312,17 +313,23 @@ onMounted(load)
                 </n-form-item>
               </n-gi>
               <n-gi>
-                <n-form-item label="执行账号">
-                  <n-select
-                    v-model:value="form.account_id"
-                    :options="accountOptions"
-                    placeholder="选择一个已登录的账号"
-                  />
+                <n-form-item label="备注（可选）">
+                  <n-input v-model:value="form.remark" placeholder="便于区分多个任务" />
                 </n-form-item>
               </n-gi>
               <n-gi span="2">
-                <n-form-item label="备注（可选）">
-                  <n-input v-model:value="form.remark" placeholder="便于区分多个任务" />
+                <n-form-item label="执行账号（可多选）">
+                  <n-select
+                    v-model:value="form.account_ids"
+                    multiple
+                    filterable
+                    :options="accountOptions"
+                    :max-tag-count="4"
+                    placeholder="选择一个或多个已登录的账号"
+                  />
+                  <div v-if="form.account_ids.length > 1" style="font-size: 12px; opacity: 0.6; margin-top: 6px">
+                    将按选择顺序依次用 {{ form.account_ids.length }} 个账号签到同一批目标；每个账号独立判定成功/失败、独立推送与重试。
+                  </div>
                 </n-form-item>
               </n-gi>
               <n-gi span="2">

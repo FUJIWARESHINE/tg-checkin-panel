@@ -118,11 +118,28 @@ async def delete_account(account_id: int, _: str = Depends(current_user)) -> OkO
         account = await session.get(Account, account_id)
         if account is None:
             raise HTTPException(status_code=404, detail="账号不存在")
-        task_count = len(
-            (await session.execute(select(Task.id).where(Task.account_id == account_id))).all()
-        )
-        if task_count:
-            raise HTTPException(status_code=400, detail=f"该账号下还有 {task_count} 个任务，请先删除任务")
+        tasks = (await session.execute(select(Task))).scalars().all()
+        blocking: list[str] = []
+        for task in tasks:
+            ids = [int(i) for i in (task.account_ids or [])] or (
+                [int(task.account_id)] if task.account_id else []
+            )
+            if account_id not in ids:
+                continue
+            if len(ids) <= 1:
+                blocking.append(task.name)
+                continue
+            # 多账号任务：把这个账号从列表里摘掉，任务继续由剩余账号执行
+            remain = [i for i in ids if i != account_id]
+            task.account_ids = remain
+            if task.account_id == account_id:
+                task.account_id = remain[0]
+        if blocking:
+            raise HTTPException(
+                status_code=400,
+                detail="该账号还是这些任务的唯一执行账号，请先修改或删除任务："
+                + "、".join(blocking[:5]),
+            )
         await session.delete(account)
 
     await pool.drop(account_id)
