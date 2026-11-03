@@ -240,7 +240,7 @@ docker compose up -d --build --force-recreate   # 改代码后重建
 docker pull ghcr.io/fujiwareshine/tg-checkin-panel:latest
 
 # Docker Hub（需在仓库 Secrets 里配一次 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN）
-docker pull docker.io/fujiwareshine/tg-checkin-panel:latest
+docker pull docker.io/xuthsand/tg-checkin-panel:latest
 ```
 
 > Docker Hub 未配置 Secret 时，工作流会自动跳过 Docker Hub，只推 GHCR，**不会让流水线失败**。
@@ -261,7 +261,7 @@ docker pull docker.io/fujiwareshine/tg-checkin-panel:latest
 
 | Secret | 值 |
 |---|---|
-| `DOCKERHUB_USERNAME` | Docker Hub 用户名（如 `fujiwareshine`） |
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名（本项目为 `xuthsand`） |
 | `DOCKERHUB_TOKEN` | Docker Hub **Access Token**（hub.docker.com → Account settings → Personal access tokens，权限选 Read & Write） |
 
 配好后下一次构建就会同时推 `docker.io/<用户名>/tg-checkin-panel:<标签>`；想立即验证可在 Actions 里手动运行「镜像构建与发布」。

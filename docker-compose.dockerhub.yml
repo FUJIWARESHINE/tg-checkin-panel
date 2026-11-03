@@ -10,7 +10,7 @@
 #   TG_IMAGE_TAG=1.0.0 docker compose -f docker-compose.dockerhub.yml up -d
 services:
   tg-checkin-panel:
-    image: docker.io/fujiwareshine/tg-checkin-panel:${TG_IMAGE_TAG:-latest}
+    image: docker.io/xuthsand/tg-checkin-panel:${TG_IMAGE_TAG:-latest}
     container_name: tg-checkin-panel
     restart: unless-stopped
     ports:
