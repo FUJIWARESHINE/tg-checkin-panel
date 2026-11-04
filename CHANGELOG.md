@@ -39,6 +39,16 @@
 - 老库首次启动会自动给 `records` 补 `notify_status` 列，无需手动迁移；
   历史记录该列为空，前端显示为「未记录」。
 
+### 修复（镜像构建变慢）
+
+- **Docker 构建缓存 100% 击穿**：`ENV ... APP_VERSION=${APP_VERSION}` 与
+  `LABEL ... revision/created` 写在 `apt-get`、`pip install` **之前**，
+  而版本号 / commit / 构建时间每次构建都不同，导致这两层及其后所有层每次重建。
+  在 arm64（QEMU 模拟）里重跑 `pip install` 单步就要 3~5 分钟。
+  - 现在这两个易变指令被移到文件末尾，`apt-get`、`pip install`、前端 `npm ci`
+    都能命中缓存，只重建应用代码那一层。
+  - 版本号仍通过 `ENV APP_VERSION` 注入运行时，行为不变。
+
 ## [1.3.0] - 2026-11-03
 
 ### 新增
