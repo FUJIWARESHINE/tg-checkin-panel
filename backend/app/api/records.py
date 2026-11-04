@@ -180,7 +180,9 @@ async def export_csv(
     buffer = io.StringIO()
     buffer.write("\ufeff")  # BOM，避免 Excel 打开中文乱码
     writer = csv.writer(buffer)
-    writer.writerow(["时间(UTC)", "任务", "账号", "目标", "触发", "状态", "尝试", "耗时(ms)", "命中", "奖励", "错误"])
+    writer.writerow(
+        ["时间(UTC)", "任务", "账号", "目标", "触发", "状态", "通知", "尝试", "耗时(ms)", "命中", "奖励", "错误"]
+    )
     for r in rows:
         writer.writerow(
             [
@@ -190,6 +192,7 @@ async def export_csv(
                 r.target,
                 r.trigger,
                 r.status,
+                r.notify_status or "",
                 r.attempt,
                 r.duration_ms,
                 r.matched_keyword,

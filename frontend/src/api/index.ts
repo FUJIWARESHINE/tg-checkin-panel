@@ -124,6 +124,8 @@ export interface RecordItem {
   reply_snippet: string
   reward_text: string
   error: string
+  /** 通知结局：sent / failed / skip:no-channel / skip:unsubscribed / skip:filtered / skip:dedup */
+  notify_status: string
   detail: Record<string, any> | null
   run_at: string
 }
@@ -150,6 +152,53 @@ export interface NotifyChannel {
   last_result: string
   last_sent_at: string | null
   created_at: string | null
+}
+
+export interface NotifyDelivery {
+  /** 该事件能正常发出去的渠道名 */
+  channels: string[]
+  /** 渠道名 → 拦下的原因 */
+  blocked: Record<string, string>
+}
+
+export interface NotifyDiagnoseTask {
+  id: number
+  name: string
+  enabled: boolean
+  scheduled: boolean
+  next_run_at: string | null
+  last_run_at: string | null
+  last_status: string
+  subscribed_events: string[]
+  channel_ids: number[]
+  delivery: Record<string, NotifyDelivery>
+  last_notify_status: string
+  problems: string[]
+}
+
+export interface NotifyDiagnose {
+  ok: boolean
+  timezone: string
+  channels: {
+    id: number
+    name: string
+    type: string
+    enabled: boolean
+    on_events: string[]
+    quiet_start: string
+    quiet_end: string
+    last_result: string
+    last_sent_at: string | null
+  }[]
+  tasks: NotifyDiagnoseTask[]
+  summary: {
+    tasks_total: number
+    tasks_can_notify: number
+    tasks_without_channel: number
+    tasks_unscheduled: number
+    channels_total: number
+    channels_enabled: number
+  }
 }
 
 export interface SystemInfo {
@@ -276,7 +325,9 @@ export const notifyApi = {
     http.put<NotifyChannel>(`/api/notify/${id}`, payload).then((r) => r.data),
   remove: (id: number) => http.delete(`/api/notify/${id}`).then((r) => r.data),
   test: (payload: Record<string, any>) => http.post('/api/notify/test', payload).then((r) => r.data),
-  testSaved: (id: number) => http.post(`/api/notify/${id}/test`).then((r) => r.data)
+  testSaved: (id: number) => http.post(`/api/notify/${id}/test`).then((r) => r.data),
+  /** 通知链路自检：哪些任务的通知发不出去、为什么 */
+  diagnose: () => http.get<NotifyDiagnose>('/api/notify/diagnose').then((r) => r.data)
 }
 
 export const systemApi = {

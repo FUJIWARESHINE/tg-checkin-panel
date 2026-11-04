@@ -239,6 +239,128 @@ async def test_channel(payload: TestNotifyIn, _: str = Depends(current_user)) ->
     return OkOut(message="测试消息已发送，请查看接收端")
 
 
+NOTIFY_PROBE_EVENTS = ("success", "fail", "auth_expired", "scheduler_error")
+
+
+@router.get("/diagnose")
+async def diagnose(_: str = Depends(current_user)) -> dict[str, object]:
+    """通知链路自检：逐任务判断「通知到底能不能发出来」。
+
+    排查「任务跑了但没收到推送」时先看这里：没选渠道、渠道停用、渠道没订阅该事件、
+    处在静默时段、任务没注册调度，都会在这里明确写出来。
+    """
+    from ..core import scheduler as sched
+    from ..models import Record, Task
+
+    async with session_scope() as session:
+        channels = (
+            (await session.execute(select(NotifyChannel).order_by(NotifyChannel.id))).scalars().all()
+        )
+        tasks = (await session.execute(select(Task).order_by(Task.id))).scalars().all()
+        views = {c.id: notifier.channel_from_orm(c) for c in channels}
+        last_records = (
+            (await session.execute(select(Record).order_by(Record.run_at.desc()).limit(200)))
+            .scalars()
+            .all()
+        )
+
+        channel_items = [
+            {
+                "id": c.id,
+                "name": c.name,
+                "type": c.type,
+                "enabled": bool(c.enabled),
+                "on_events": list(c.on_events or []),
+                "quiet_start": c.quiet_start or "",
+                "quiet_end": c.quiet_end or "",
+                "last_result": c.last_result or "",
+                "last_sent_at": c.last_sent_at.isoformat() if c.last_sent_at else None,
+            }
+            for c in channels
+        ]
+
+        last_notify: dict[int, str] = {}
+        for record in last_records:
+            if record.task_id is not None and record.task_id not in last_notify:
+                last_notify[record.task_id] = record.notify_status or ""
+
+        task_items: list[dict[str, object]] = []
+        unscheduled = 0
+        no_channel = 0
+        delivering = 0
+
+        for task in tasks:
+            problems: list[str] = []
+            ids = [int(i) for i in (task.notify_channel_ids or [])]
+            subscribed = list(task.notify_on or [])
+            events = subscribed or list(NOTIFY_PROBE_EVENTS)
+
+            delivery: dict[str, dict[str, object]] = {}
+            for event in events:
+                level = notifier.EVENT_LEVEL.get(event, "info")
+                usable: list[str] = []
+                blocked: dict[str, str] = {}
+                for cid in ids:
+                    view = views.get(cid)
+                    if view is None:
+                        blocked[f"#{cid}"] = "渠道已不存在"
+                        continue
+                    reason = notifier.skip_reason(view, event, level)
+                    if reason:
+                        blocked[view.name] = reason
+                    else:
+                        usable.append(view.name)
+                delivery[event] = {"channels": usable, "blocked": blocked}
+                if ids and not usable:
+                    detail = "；".join(f"{k}：{v}" for k, v in blocked.items())
+                    problems.append(f"「{notifier.EVENT_TITLE.get(event, event)}」通知发不出去（{detail}）")
+
+            if not ids:
+                problems.insert(0, "没有选择推送渠道，任何通知都不会发出")
+                no_channel += 1
+            elif any(delivery[e]["channels"] for e in delivery):
+                delivering += 1
+
+            live = sched.next_run_time(task.id)
+            if not task.enabled:
+                problems.append("任务已停用，不会自动执行")
+            elif sched.scheduler.running and live is None:
+                unscheduled += 1
+                problems.append("调度未生效（算不出下次执行时间），请重新保存任务")
+
+            task_items.append(
+                {
+                    "id": task.id,
+                    "name": task.name,
+                    "enabled": bool(task.enabled),
+                    "scheduled": live is not None,
+                    "next_run_at": live.isoformat() if live else None,
+                    "last_run_at": task.last_run_at.isoformat() if task.last_run_at else None,
+                    "last_status": task.last_status or "",
+                    "subscribed_events": subscribed,
+                    "channel_ids": ids,
+                    "delivery": delivery,
+                    "last_notify_status": last_notify.get(task.id, ""),
+                    "problems": problems,
+                }
+            )
+
+    return {
+        "ok": True,
+        "timezone": notifier.settings.tz,
+        "channels": channel_items,
+        "tasks": task_items,
+        "summary": {
+            "tasks_total": len(task_items),
+            "tasks_can_notify": delivering,
+            "tasks_without_channel": no_channel,
+            "tasks_unscheduled": unscheduled,
+            "channels_total": len(channel_items),
+            "channels_enabled": sum(1 for c in channel_items if c["enabled"]),
+        },
+    }
+
+
 @router.post("/{channel_id}/test", response_model=OkOut)
 async def test_saved_channel(channel_id: int, _: str = Depends(current_user)) -> OkOut:
     async with session_scope() as session:

@@ -19,15 +19,32 @@ import {
   NSwitch,
   NTag
 } from 'naive-ui'
-import { notifyApi, extractError, EVENT_LABELS, type ChannelTypeMeta, type NotifyChannel } from '@/api'
+import { notifyApi, extractError, EVENT_LABELS, type ChannelTypeMeta, type NotifyChannel, type NotifyDiagnose } from '@/api'
 import { feedback } from '@/utils/feedback'
-import { formatTime } from '@/utils/format'
+import { formatTime, notifyLabel, notifyTagType } from '@/utils/format'
 
 const channels = ref<NotifyChannel[]>([])
 const typeMeta = ref<Record<string, ChannelTypeMeta>>({})
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref<number | 'new' | null>(null)
+
+const diagnosing = ref(false)
+const diagnose = ref<NotifyDiagnose | null>(null)
+const problemTasks = computed(() =>
+  (diagnose.value?.tasks || []).filter((t) => (t.problems || []).length > 0)
+)
+
+async function runDiagnose() {
+  diagnosing.value = true
+  try {
+    diagnose.value = await notifyApi.diagnose()
+  } catch (error) {
+    feedback.error(extractError(error))
+  } finally {
+    diagnosing.value = false
+  }
+}
 
 const modalShow = ref(false)
 const editingId = ref<number | null>(null)
@@ -167,7 +184,10 @@ function eventLabels(events: string[]) {
   return events.map((e) => EVENT_LABELS[e] ?? e).join(' / ')
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  runDiagnose()
+})
 </script>
 
 <template>
@@ -190,6 +210,67 @@ onMounted(load)
       ② 给 @userinfobot 发消息，拿到你自己的 Chat ID；③ 把两者填进下面。
       别忘了先给这个 Bot 发一条消息，否则 Bot 无法主动找你。
     </n-alert>
+
+    <n-card class="soft-card" size="small" style="margin-bottom: 16px">
+      <template #header>
+        <n-space align="center" :size="8">
+          <span style="font-weight: 500">通知链路自检</span>
+          <n-button size="tiny" :loading="diagnosing" @click="runDiagnose">重新自检</n-button>
+        </n-space>
+      </template>
+
+      <div v-if="!diagnose" style="font-size: 12px; opacity: 0.6">正在自检…</div>
+      <template v-else>
+        <n-space :size="8" style="margin-bottom: 12px; flex-wrap: wrap">
+          <n-tag size="small" round :bordered="false">任务 {{ diagnose.summary.tasks_total }}</n-tag>
+          <n-tag size="small" round :bordered="false" type="success">
+            可送达 {{ diagnose.summary.tasks_can_notify }}
+          </n-tag>
+          <n-tag
+            size="small"
+            round
+            :bordered="false"
+            :type="diagnose.summary.tasks_without_channel ? 'warning' : 'default'"
+          >
+            未配渠道 {{ diagnose.summary.tasks_without_channel }}
+          </n-tag>
+          <n-tag
+            size="small"
+            round
+            :bordered="false"
+            :type="diagnose.summary.tasks_unscheduled ? 'error' : 'default'"
+          >
+            未调度 {{ diagnose.summary.tasks_unscheduled }}
+          </n-tag>
+          <n-tag size="small" round :bordered="false">
+            渠道 {{ diagnose.summary.channels_enabled }}/{{ diagnose.summary.channels_total }} 启用
+          </n-tag>
+        </n-space>
+
+        <n-alert v-if="!problemTasks.length" type="success" :bordered="false" style="font-size: 12px">
+          所有任务的通知链路都正常：跑完会有推送。
+        </n-alert>
+        <n-space v-else vertical :size="10">
+          <div v-for="task in problemTasks" :key="task.id" class="diag-item">
+            <div class="diag-title">
+              <span>#{{ task.id }} {{ task.name }}</span>
+              <n-tag
+                v-if="task.last_notify_status"
+                size="tiny"
+                round
+                :bordered="false"
+                :type="notifyTagType(task.last_notify_status)"
+              >
+                最近通知：{{ notifyLabel(task.last_notify_status) }}
+              </n-tag>
+            </div>
+            <ul class="diag-problems">
+              <li v-for="(item, index) in task.problems" :key="index">{{ item }}</li>
+            </ul>
+          </div>
+        </n-space>
+      </template>
+    </n-card>
 
     <n-grid :cols="3" :x-gap="16" :y-gap="16" responsive="screen" item-responsive>
       <n-gi v-for="row in channels" :key="row.id" span="3 s:3 m:1">
@@ -337,3 +418,24 @@ onMounted(load)
     </n-modal>
   </div>
 </template>
+
+<style scoped>
+.diag-item {
+  border-left: 3px solid #f0a020;
+  padding-left: 10px;
+}
+.diag-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+.diag-problems {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  opacity: 0.8;
+}
+</style>

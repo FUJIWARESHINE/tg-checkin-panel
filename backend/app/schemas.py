@@ -337,6 +337,7 @@ class RecordOut(BaseModel):
     reply_snippet: str
     reward_text: str
     error: str
+    notify_status: str = ""
     detail: dict[str, Any] | None = None
     run_at: datetime
 

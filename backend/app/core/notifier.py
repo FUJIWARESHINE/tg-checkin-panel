@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import smtplib
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from email.header import Header
 from email.mime.text import MIMEText
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -41,6 +44,10 @@ class NotifyMessage:
     task_name: str
     fields: list[tuple[str, str]] = field(default_factory=list)
     extra: str = ""
+    # 机器人实际返回的原文，用来判断是真签到成功还是「假成功」
+    reply: str = ""
+    # 放在原文之后的收尾信息（下次执行 / 时区），避免把原文压在角落里
+    tail: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def level(self) -> str:
@@ -54,9 +61,17 @@ class NotifyMessage:
     def title(self) -> str:
         return f"{self.icon}【{EVENT_TITLE.get(self.event, self.event)}】{self.task_name}"
 
+    @property
+    def reply_lines(self) -> list[str]:
+        return self.reply.split("\n") if self.reply else []
+
     def as_text(self) -> str:
         lines = [self.title]
         lines.extend(f"{k}：{v}" for k, v in self.fields if v not in ("", None))
+        if self.reply:
+            lines.append("返回内容：")
+            lines.append(self.reply)
+        lines.extend(f"{k}：{v}" for k, v in self.tail if v not in ("", None))
         if self.extra:
             lines.append(self.extra)
         return "\n".join(lines)
@@ -67,6 +82,18 @@ class NotifyMessage:
             if value in ("", None):
                 continue
             lines.append(f"{key}：<code>{_escape(str(value))}</code>")
+        if self.reply:
+            # Telegram 单条上限 4096 字符，超长时去掉等宽块，避免整条被拒
+            block = f"<pre>{_escape(self.reply)}</pre>"
+            if len("\n".join(lines)) + len(block) + 8 <= 4000:
+                lines.append("返回内容：")
+                lines.append(block)
+            else:
+                lines.append(f"返回内容：{_escape(self.reply)}")
+        for key, value in self.tail:
+            if value in ("", None):
+                continue
+            lines.append(f"{key}：<code>{_escape(str(value))}</code>")
         if self.extra:
             lines.append(f"\n<i>{_escape(self.extra)}</i>")
         return "\n".join(lines)
@@ -74,6 +101,11 @@ class NotifyMessage:
     def as_markdown(self) -> str:
         lines = [f"**{self.title}**"]
         lines.extend(f"> {k}：{v}" for k, v in self.fields if v not in ("", None))
+        if self.reply:
+            lines.append("")
+            lines.append("**返回内容**")
+            lines.extend(f"> {line}" for line in self.reply_lines)
+        lines.extend(f"> {k}：{v}" for k, v in self.tail if v not in ("", None))
         if self.extra:
             lines.append(f"\n{self.extra}")
         return "\n".join(lines)
@@ -157,9 +189,17 @@ async def send_bark(cfg: dict[str, Any], msg: NotifyMessage) -> str:
     if not key:
         raise NotifyError("Bark 渠道缺少 device_key")
     base = (cfg.get("server") or "https://api.day.app").rstrip("/")
+    body = "\n".join(f"{k}：{v}" for k, v in msg.fields if v)
+    if msg.reply:
+        body += f"\n\n返回内容：\n{msg.reply}"
+    tail = "\n".join(f"{k}：{v}" for k, v in msg.tail if v)
+    if tail:
+        body += f"\n{tail}"
+    if msg.extra:
+        body += f"\n{msg.extra}"
     payload = {
         "title": msg.title,
-        "body": "\n".join(f"{k}：{v}" for k, v in msg.fields if v),
+        "body": body,
         "group": cfg.get("group") or "TG签到",
         "level": "critical" if msg.level == "fail" else "active",
         "icon": cfg.get("icon") or "",
@@ -199,6 +239,7 @@ async def send_webhook(cfg: dict[str, Any], msg: NotifyMessage) -> str:
         "title": msg.title,
         "task": msg.task_name,
         "fields": {k: v for k, v in msg.fields},
+        "reply": msg.reply,
         "text": msg.as_text(),
     }
     async with httpx.AsyncClient(timeout=20) as client:
@@ -351,23 +392,47 @@ def channel_from_orm(obj: Any) -> ChannelView:
     )
 
 
+def _local_now() -> datetime:
+    """按面板配置时区取当前时间（静默时段 / 降噪跨天判断都用它）。"""
+    try:
+        tz = ZoneInfo(settings.tz or "UTC")
+    except Exception:  # noqa: BLE001
+        tz = timezone.utc
+    return datetime.now(tz)
+
+
 class _Dedup:
-    """同一任务的连续失败合并推送，成功后补一条恢复通知。"""
+    """连续失败合并推送，成功后补一条恢复通知。
+
+    key 必须精确到「任务 + 账号」，否则多账号任务里 A 账号的连续失败会把
+    B 账号的首次失败吞掉；同时按天重置，避免昨天的失败计数让今天的首条
+    失败通知被静默。
+    """
 
     def __init__(self) -> None:
         self._fail_streak: dict[str, int] = {}
+        self._fail_day: dict[str, str] = {}
 
-    def should_send(self, key: str, event: str) -> tuple[bool, str]:
+    def reset(self) -> None:
+        self._fail_streak.clear()
+        self._fail_day.clear()
+
+    def should_send(self, key: str, event: str, day: str | None = None) -> tuple[bool, str]:
         if event in ("success", "auth_expired", "scheduler_error"):
             streak = self._fail_streak.pop(key, 0)
+            self._fail_day.pop(key, None)
             if streak >= 2:
                 return True, f"（此前已连续失败 {streak} 次，本次已恢复）"
             return True, ""
         if event == "fail":
+            today = day or _local_now().strftime("%Y-%m-%d")
+            if self._fail_day.get(key) != today:
+                self._fail_day[key] = today
+                self._fail_streak[key] = 0
             streak = self._fail_streak.get(key, 0) + 1
             self._fail_streak[key] = streak
             if streak in (1, 5, 10) or streak % 20 == 0:
-                return True, "" if streak == 1 else f"（已连续失败 {streak} 次，后续将降噪）"
+                return True, "" if streak == 1 else f"（今日已连续失败 {streak} 次，后续将降噪）"
             return False, ""
         return True, ""
 
@@ -378,7 +443,8 @@ _dedup = _Dedup()
 def _in_quiet_hours(view: ChannelView, level: str) -> bool:
     if not view.quiet_start or not view.quiet_end:
         return False
-    current = time.strftime("%H:%M")
+    # 之前用服务器本地时间，容器 TZ 与面板时区不一致时会把静默时段算错、误吞通知
+    current = _local_now().strftime("%H:%M")
     start, end = view.quiet_start, view.quiet_end
     if start <= end:
         inside = start <= current <= end
@@ -393,6 +459,17 @@ def _event_allowed(view: ChannelView, event: str) -> bool:
     if not view.on_events:
         return True
     return event in view.on_events
+
+
+def skip_reason(view: ChannelView, event: str, level: str) -> str:
+    """渠道不发送的原因；空串表示可以发送。调度自检和真实推送共用同一套判定。"""
+    if not view.enabled:
+        return "渠道已停用"
+    if not _event_allowed(view, event):
+        return f"渠道未订阅 {event} 事件"
+    if _in_quiet_hours(view, level):
+        return "处于静默时段"
+    return ""
 
 
 async def send_now(view: ChannelView, msg: NotifyMessage) -> tuple[bool, str]:
@@ -411,32 +488,66 @@ async def send_now(view: ChannelView, msg: NotifyMessage) -> tuple[bool, str]:
     return False, last_error
 
 
+@dataclass
+class DispatchOutcome:
+    """一次推送的结果：成功发出的渠道 + 一条都没发出时的原因。"""
+
+    results: list[tuple[str, bool, str]] = field(default_factory=list)
+    reason: str = ""
+
+    @property
+    def sent(self) -> bool:
+        return any(ok for _, ok, _ in self.results)
+
+    @property
+    def all_ok(self) -> bool:
+        return bool(self.results) and all(ok for _, ok, _ in self.results)
+
+
 async def dispatch(
-    msg: NotifyMessage, channels: list[ChannelView]
-) -> list[tuple[str, bool, str]]:
-    """向所有订阅了该事件的渠道推送，返回 (渠道名, 成功, 信息)。"""
-    key = f"{msg.task_name}:{msg.event}"
+    msg: NotifyMessage, channels: list[ChannelView], *, scope: str = ""
+) -> DispatchOutcome:
+    """向所有订阅了该事件的渠道推送。
+
+    `scope` 是降噪用的唯一标识，调用方应带上「任务 + 账号」，避免多账号任务
+    互相吞掉失败通知；不传时退回任务名。注意 key 里不能再拼事件名，否则
+    成功事件查不到失败计数，「连续失败后恢复」的提示永远不会出现。
+    """
+    key = scope or msg.task_name
     allow, suffix = _dedup.should_send(key, msg.event)
     if not allow:
         logger.info("推送降噪：%s 的 %s 事件已合并", msg.task_name, msg.event)
-        return []
+        return DispatchOutcome(reason="dedup")
     if suffix:
         msg.extra = (msg.extra + " " + suffix).strip()
 
-    results: list[tuple[str, bool, str]] = []
+    outcome = DispatchOutcome()
     for view in channels:
-        if not view.enabled:
-            continue
-        if not _event_allowed(view, msg.event):
-            continue
-        if _in_quiet_hours(view, msg.level):
-            logger.info("渠道 %s 处于静默时段，跳过 %s 推送", view.name, msg.event)
+        reason = skip_reason(view, msg.event, msg.level)
+        if reason:
+            logger.info("渠道 %s 跳过 %s 推送：%s", view.name, msg.event, reason)
+            outcome.reason = outcome.reason or f"{view.name}：{reason}"
             continue
         ok, info = await send_now(view, msg)
-        results.append((view.name, ok, info))
+        outcome.results.append((view.name, ok, info))
         if not ok:
             logger.error("渠道 %s 推送最终失败：%s", view.name, info)
-    return results
+    return outcome
+
+
+
+REPLY_LIMIT = 900
+
+
+def clean_reply(text: str, limit: int = REPLY_LIMIT) -> str:
+    """规整机器人返回原文：统一换行、压缩空行、超长截断。"""
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not value:
+        return ""
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    if len(value) > limit:
+        value = value[:limit].rstrip() + " …（内容过长已截断）"
+    return value
 
 
 def build_message(
@@ -451,6 +562,7 @@ def build_message(
     reward_text: str = "",
     error: str = "",
     next_run: str = "",
+    reply: str = "",
 ) -> NotifyMessage:
     fields: list[tuple[str, str]] = []
     if account_name:
@@ -465,8 +577,19 @@ def build_message(
         fields.append(("命中", matched_keyword))
     if reward_text:
         fields.append(("奖励", reward_text))
+    if error:
+        # 失败时把原因摆到明面上，而不是塞在末尾的小字里
+        label = "失败原因" if EVENT_LEVEL.get(event) == "fail" else "说明"
+        fields.append((label, clean_reply(error, 400)))
+    tail: list[tuple[str, str]] = []
     if next_run:
-        fields.append(("下次", next_run))
+        tail.append(("下次", next_run))
     if settings.tz:
-        fields.append(("时区", settings.tz))
-    return NotifyMessage(event=event, task_name=task_name, fields=fields, extra=error)
+        tail.append(("时区", settings.tz))
+    return NotifyMessage(
+        event=event,
+        task_name=task_name,
+        fields=fields,
+        tail=tail,
+        reply=clean_reply(reply),
+    )

@@ -130,13 +130,28 @@ const columns: DataTableColumns<Task> = [
   {
     title: '任务',
     key: 'name',
-    minWidth: 160,
+    minWidth: 180,
     render: (row) =>
       h(
         'div',
         {},
         [
-          h('div', { style: 'font-weight:500;font-size:13px' }, row.name),
+          h('div', { style: 'font-weight:500;font-size:13px' }, [
+            row.name,
+            (row.notify_channel_ids || []).length
+              ? null
+              : h(
+                  NTag,
+                  {
+                    size: 'tiny',
+                    type: 'warning',
+                    round: true,
+                    bordered: false,
+                    style: 'margin-left:6px'
+                  },
+                  { default: () => '未配推送渠道' }
+                )
+          ]),
           row.remark ? h('div', { style: 'font-size:11px;opacity:.6' }, row.remark) : null
         ].filter(Boolean) as any
       )
@@ -166,7 +181,18 @@ const columns: DataTableColumns<Task> = [
     title: '下次执行',
     key: 'next_run_at',
     width: 150,
-    render: (row) => (row.enabled ? formatRelative(row.next_run_at) : '—')
+    render: (row) => {
+      if (!row.enabled) return '—'
+      if (!row.next_run_at) {
+        // 启用中却算不出下次执行时间 = 调度没注册上，这类任务不会自动跑，也不会有通知
+        return h(
+          NTag,
+          { size: 'small', type: 'error', round: true, bordered: false },
+          { default: () => '未调度' }
+        )
+      }
+      return formatRelative(row.next_run_at)
+    }
   },
   {
     title: '最近状态',

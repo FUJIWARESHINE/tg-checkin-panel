@@ -125,6 +125,8 @@ class Record(Base):
     reply_snippet: Mapped[str] = mapped_column(Text, default="")
     reward_text: Mapped[str] = mapped_column(String(255), default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    # 本次记录对应的通知结局：sent / failed / skip:no-channel / skip:unsubscribed ...
+    notify_status: Mapped[str] = mapped_column(String(32), default="")
     detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=None)
     run_at: Mapped[datetime] = _now_col()
 

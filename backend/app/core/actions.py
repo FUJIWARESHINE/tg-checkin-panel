@@ -57,6 +57,8 @@ class RunContext:
     matched_keyword: str = ""
     reward_text: str = ""
     trace: list[dict[str, Any]] = field(default_factory=list)
+    # 本次执行期间机器人发来的所有文本（按时间顺序），用于把原文一并推给用户
+    replies: list[str] = field(default_factory=list)
 
     def note(self, index: int, step_type: str, message: str, ok: bool = True) -> None:
         self.trace.append(
@@ -292,6 +294,9 @@ async def h_wait_reply(ctx: RunContext, step: dict[str, Any], index: int) -> str
         hit, snippet = match_text(keyword, text, mode)
         ctx.reply_message = message
         ctx.reply_text = text
+        # 记下每一步收到的原话（去重），推送时按顺序展示，方便判断是不是假成功
+        if not ctx.replies or ctx.replies[-1] != text:
+            ctx.replies.append(text)
         ctx.variables["last_reply"] = text
         if hit or not require_match:
             ctx.matched_keyword = snippet or keyword

@@ -18,7 +18,14 @@ import {
 } from 'naive-ui'
 import { recordApi, taskApi, extractError, type RecordItem, type Task } from '@/api'
 import { feedback } from '@/utils/feedback'
-import { formatDuration, formatTime, statusTagType, triggerLabel } from '@/utils/format'
+import {
+  formatDuration,
+  formatTime,
+  notifyLabel,
+  notifyTagType,
+  statusTagType,
+  triggerLabel
+} from '@/utils/format'
 
 const rows = ref<RecordItem[]>([])
 const total = ref(0)
@@ -150,6 +157,17 @@ const columns: DataTableColumns<RecordItem> = [
         default: () => (row.status === 'success' ? '成功' : '失败')
       })
   },
+  {
+    title: '通知',
+    key: 'notify_status',
+    width: 96,
+    render: (row) =>
+      h(
+        NTag,
+        { size: 'small', round: true, bordered: false, type: notifyTagType(row.notify_status) },
+        { default: () => notifyLabel(row.notify_status) }
+      )
+  },
   { title: '尝试', key: 'attempt', width: 66 },
   { title: '耗时', key: 'duration_ms', width: 82, render: (row) => formatDuration(row.duration_ms) },
   {
@@ -157,7 +175,12 @@ const columns: DataTableColumns<RecordItem> = [
     key: 'summary',
     minWidth: 220,
     ellipsis: { tooltip: true },
-    render: (row) => row.reward_text || row.matched_keyword || row.reply_snippet || row.error || '—'
+    // 失败优先展示错误原因，成功优先展示奖励/原文；完整内容在「详情」里
+    render: (row) =>
+      row.reward_text ||
+      row.matched_keyword ||
+      (row.status === 'success' ? row.reply_snippet : row.error || row.reply_snippet) ||
+      '—'
   },
   {
     title: '操作',
@@ -250,7 +273,7 @@ onMounted(async () => {
         size="small"
         remote
         :row-key="(row: RecordItem) => row.id"
-        :scroll-x="1250"
+        :scroll-x="1350"
       />
 
       <n-space justify="end" style="margin-top: 14px">
@@ -286,10 +309,15 @@ onMounted(async () => {
             {{ detail.status === 'success' ? '成功' : '失败' }}
           </n-tag>
         </n-descriptions-item>
+        <n-descriptions-item label="通知">
+          <n-tag :type="notifyTagType(detail.notify_status)" size="small" round :bordered="false">
+            {{ notifyLabel(detail.notify_status) }}
+          </n-tag>
+        </n-descriptions-item>
         <n-descriptions-item label="命中关键词">{{ detail.matched_keyword || '—' }}</n-descriptions-item>
         <n-descriptions-item label="提取奖励">{{ detail.reward_text || '—' }}</n-descriptions-item>
         <n-descriptions-item label="尝试次数">第 {{ detail.attempt }} 次</n-descriptions-item>
-        <n-descriptions-item label="完整回复" :span="2">
+        <n-descriptions-item label="机器人回复（原文）" :span="2">
           <div class="mono" style="white-space: pre-wrap; max-height: 200px; overflow: auto">
             {{ detail.reply_snippet || '—' }}
           </div>

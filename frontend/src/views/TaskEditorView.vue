@@ -485,6 +485,22 @@ onMounted(load)
           <n-alert v-if="!channels.length" type="info" :bordered="false" style="font-size: 12px">
             还没有推送渠道，去「推送设置」添加一个 Telegram Bot 渠道。
           </n-alert>
+          <n-alert
+            v-else-if="!form.notify_channel_ids.length"
+            type="warning"
+            :bordered="false"
+            style="font-size: 12px"
+          >
+            没有选择渠道时，这个任务跑完不会发任何通知（记录里会标记为「未配渠道」）。
+          </n-alert>
+          <n-alert
+            v-else-if="!form.notify_on.length"
+            type="info"
+            :bordered="false"
+            style="font-size: 12px"
+          >
+            未勾选订阅事件时按「全部事件」推送。
+          </n-alert>
         </n-card>
       </n-gi>
     </n-grid>

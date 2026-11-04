@@ -68,3 +68,27 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`
 }
+
+/** 通知结局码 → 中文标签（后端 Record.notify_status） */
+export function notifyLabel(status: string | null | undefined): string {
+  if (!status) return '未记录'
+  if (status === 'sent') return '已推送'
+  if (status === 'failed') return '推送失败'
+  const map: Record<string, string> = {
+    'skip:no-channel': '未配渠道',
+    'skip:channel-missing': '渠道已删',
+    'skip:unsubscribed': '未订阅',
+    'skip:filtered': '被渠道过滤',
+    'skip:dedup': '降噪合并'
+  }
+  return map[status] ?? status
+}
+
+export function notifyTagType(
+  status: string | null | undefined
+): 'success' | 'error' | 'warning' | 'default' {
+  if (!status) return 'default'
+  if (status === 'sent') return 'success'
+  if (status === 'failed') return 'error'
+  return 'warning'
+}

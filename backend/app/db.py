@@ -39,6 +39,10 @@ def _migrate(conn: Connection) -> None:
     if not _table_columns(conn, "tasks"):
         return
 
+    if _table_columns(conn, "records") and "notify_status" not in _table_columns(conn, "records"):
+        conn.exec_driver_sql("ALTER TABLE records ADD COLUMN notify_status VARCHAR(32) DEFAULT ''")
+        logger.info("数据库迁移：records 表已新增 notify_status 列")
+
     if "account_ids" not in _table_columns(conn, "tasks"):
         conn.exec_driver_sql("ALTER TABLE tasks ADD COLUMN account_ids JSON DEFAULT '[]'")
         logger.info("数据库迁移：tasks 表已新增 account_ids 列")

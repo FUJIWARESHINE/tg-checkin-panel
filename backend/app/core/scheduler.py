@@ -75,8 +75,10 @@ async def _notify_scheduler_error(task_id: int, error: str) -> None:
                 account = await session.get(Account, account_id)
                 if account is not None:
                     break
+            # 调度异常属于基础设施告警，不受任务级 notify_on 订阅影响，始终尝试推送
             channel_ids = list(task.notify_channel_ids or [])
             if not channel_ids:
+                logger.warning("任务 %s 未配置推送渠道，调度异常通知未发送", task.name)
                 return
             rows = (
                 (await session.execute(select(NotifyChannel).where(NotifyChannel.id.in_(channel_ids))))

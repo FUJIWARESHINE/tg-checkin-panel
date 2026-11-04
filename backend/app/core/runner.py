@@ -155,11 +155,33 @@ async def _notify(
     matched_keyword: str = "",
     reward_text: str = "",
     error: str = "",
-) -> None:
+    reply: str = "",
+) -> str:
+    """推送一条通知，返回结局码（写进执行记录，便于事后排查漏通知）。
+
+    结局码：sent / failed / skip:unsubscribed / skip:no-channel /
+    skip:channel-missing / skip:filtered / skip:dedup
+    """
+    subscribed = list(task.notify_on or [])
+    if subscribed and event not in subscribed:
+        logger.info("任务 %s 未订阅 %s 事件，跳过推送", task.name, event)
+        return "skip:unsubscribed"
+
     channel_ids = list(task.notify_channel_ids or [])
+    if not channel_ids:
+        # 以前这里直接 return，任务配漏渠道时一句日志都没有，排查时完全看不见
+        logger.warning(
+            "任务 %s（账号 %s）未配置推送渠道，%s 通知未发送", task.name, account.name, event
+        )
+        return "skip:no-channel"
+
     views = await _load_channels(channel_ids)
     if not views:
-        return
+        logger.warning(
+            "任务 %s 绑定的推送渠道 %s 已不存在，%s 通知未发送", task.name, channel_ids, event
+        )
+        return "skip:channel-missing"
+
     next_run = task.next_run_at.astimezone(timezone.utc).isoformat() if task.next_run_at else ""
     msg = notifier.build_message(
         event=event,
@@ -172,10 +194,39 @@ async def _notify(
         reward_text=reward_text,
         error=error,
         next_run=next_run,
+        reply=reply,
     )
-    results = await notifier.dispatch(msg, views)
-    for name, ok, info in results:
+    outcome = await notifier.dispatch(
+        msg, views, scope=f"task{task.id}:account{account.id}"
+    )
+    for name, ok, info in outcome.results:
         await _mark_channel_result(name, ok, info)
+
+    if outcome.all_ok:
+        return "sent"
+    if outcome.results:
+        return "failed"
+    if outcome.reason == "dedup":
+        return "skip:dedup"
+    logger.warning(
+        "任务 %s（账号 %s）的 %s 通知没有任何渠道发出：%s",
+        task.name,
+        account.name,
+        event,
+        outcome.reason or "未知原因",
+    )
+    return "skip:filtered"
+
+
+async def _mark_notify_status(record_ids: list[int], status: str) -> None:
+    """把通知结局写回本次执行产生的记录。"""
+    if not record_ids or not status:
+        return
+    async with session_scope() as session:
+        for record_id in record_ids:
+            record = await session.get(Record, record_id)
+            if record is not None:
+                record.notify_status = status
 
 
 async def _run_account(
@@ -194,6 +245,8 @@ async def _run_account(
     reward = ""
     summary: list[dict[str, Any]] = []
     recorded: set[str] = set()
+    record_ids: list[int] = []
+    replies: list[tuple[str, str, bool]] = []
     target_label = ", ".join(str(t.get("chat") or "") for t in targets)
 
     api_hash = decrypt(account.api_hash) or ""
@@ -206,7 +259,7 @@ async def _run_account(
             if str(item.get("chat") or "").strip() in recorded:
                 continue
             chat = str(item.get("chat") or "").strip()
-            await _save_record(
+            record_ids.append(await _save_record(
                 task_id=task.id,
                 task_name=task.name,
                 account_id=account.id,
@@ -219,7 +272,7 @@ async def _run_account(
                 reply_snippet=truncate(error_text, 800),
                 error=truncate(error_text, 800),
                 detail={"account_error": True},
-            )
+            ))
             summary.append({"target": chat, "ok": False, "error": error_text, "duration_ms": 0})
 
     try:
@@ -257,6 +310,7 @@ async def _run_account(
             target_matched = ""
             target_reward = ""
             trace: list[dict[str, Any]] = []
+            ctx = None
 
             try:
                 entity = await acct.call(raw.get_entity, chat)
@@ -307,25 +361,43 @@ async def _run_account(
             if target_reward and not reward:
                 reward = target_reward
 
-            await _save_record(
-                task_id=task.id,
-                task_name=task.name,
-                account_id=account.id,
-                account_name=account.name,
-                target=chat,
-                trigger=trigger,
-                status=status,
-                attempt=attempt,
-                duration_ms=duration_ms,
-                matched_keyword=truncate(target_matched, 128),
-                reply_snippet=truncate(_last_reply(trace) or target_error, 800),
-                reward_text=truncate(target_reward, 255),
-                error=truncate(target_error, 800),
-                detail={"trace": trace, "variables": _safe_variables(trace)},
+            # 机器人原话：ctx.replies 记录本次收到的每一条完整文本（含未命中关键词的那条），
+            # 比 trace 里被截成 60 字的摘要更适合判断「真成功还是假成功」
+            target_reply = ""
+            if ctx is not None:
+                texts = [str(t).strip() for t in getattr(ctx, "replies", []) if str(t).strip()]
+                target_reply = _join_replies(texts) or str(getattr(ctx, "reply_text", "") or "").strip()
+            if not target_reply:
+                target_reply = _last_reply(trace)
+            replies.append((chat, target_reply, target_ok))
+
+            record_ids.append(
+                await _save_record(
+                    task_id=task.id,
+                    task_name=task.name,
+                    account_id=account.id,
+                    account_name=account.name,
+                    target=chat,
+                    trigger=trigger,
+                    status=status,
+                    attempt=attempt,
+                    duration_ms=duration_ms,
+                    matched_keyword=truncate(target_matched, 128),
+                    reply_snippet=truncate(target_reply or target_error, 800),
+                    reward_text=truncate(target_reward, 255),
+                    error=truncate(target_error, 800),
+                    detail={"trace": trace, "variables": _safe_variables(trace)},
+                )
             )
             recorded.add(chat)
             summary.append(
-                {"target": chat, "ok": target_ok, "error": target_error, "duration_ms": duration_ms}
+                {
+                    "target": chat,
+                    "ok": target_ok,
+                    "error": target_error,
+                    "reply": target_reply,
+                    "duration_ms": duration_ms,
+                }
             )
 
     except Exception as exc:  # noqa: BLE001
@@ -353,6 +425,8 @@ async def _run_account(
         "reward": reward,
         "duration_ms": int((time.monotonic() - started) * 1000),
         "targets": summary,
+        "reply": _compose_reply(replies, multi=len(targets) > 1),
+        "record_ids": record_ids,
     }
 
 
@@ -425,7 +499,7 @@ async def execute_task(
                 reward = result["reward"]
 
             # 每个账号独立推送，多账号时能一眼看出是哪个号失败
-            await _notify(
+            notify_status = await _notify(
                 event="success" if result["ok"] else "fail",
                 task=task,
                 account=account,
@@ -435,7 +509,12 @@ async def execute_task(
                 matched_keyword=result["matched"],
                 reward_text=result["reward"],
                 error=result["error"],
+                reply=result.get("reply", ""),
             )
+            try:
+                await _mark_notify_status(list(result.get("record_ids") or []), notify_status)
+            except Exception:  # noqa: BLE001
+                logger.exception("任务 %s 账号 %s 的通知状态写入失败", task.name, account.name)
 
         ok_count = sum(1 for r in account_results if r["ok"])
         if all_ok:
@@ -476,6 +555,29 @@ def _last_reply(trace: list[dict[str, Any]]) -> str:
         if item.get("type") == "wait_reply" and item.get("ok"):
             return str(item.get("message") or "")
     return ""
+
+
+def _join_replies(texts: list[str], keep: int = 3, per_line: int = 400) -> str:
+    """把一次执行里收到的多条回复拼成一段，最多保留最后 keep 条。"""
+    picked = [t[:per_line] for t in texts[-keep:]] if texts else []
+    return "\n".join(picked)
+
+
+def _compose_reply(items: list[tuple[str, str, bool]], multi: bool = False) -> str:
+    """把各目标的机器人原文拼成一段推送内容。
+
+    多目标时优先展示失败的那几个（排查失败原因比看成功文案更急），
+    并带上目标名，避免几个对话的回复混在一起分不清。
+    """
+    filled = [(chat, text.strip(), ok) for chat, text, ok in items if (text or "").strip()]
+    if not filled:
+        return ""
+    failed = [(chat, text) for chat, text, ok in filled if not ok]
+    picked = failed or [(chat, text) for chat, text, ok in filled]
+    if not multi:
+        return picked[0][1]
+    # 多目标任务一定要标出这条回复来自哪个会话，否则几个机器人的话分不清
+    return "\n\n".join(f"【{chat}】\n{text}" for chat, text in picked[:3])
 
 
 def _safe_variables(trace: list[dict[str, Any]]) -> dict[str, Any]:
