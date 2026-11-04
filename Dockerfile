@@ -19,17 +19,23 @@ FROM python:3.12-slim
 # CI 会传入真实版本号（= git tag）；本地构建时留空则读 VERSION 文件
 ARG APP_VERSION=""
 ARG VCS_REF="unknown"
+ARG BUILD_DATE=""
 ARG IMAGE_SOURCE="https://github.com/FUJIWARESHINE/tg-checkin-panel"
 
-# 注意：这里只能放「每次构建都相同」的变量。
-# APP_VERSION 每次构建都不同（tag 是 1.3.1，main 是 0.0.0-dev.N），
-# 一旦写进这个 ENV，它下面的 apt-get / pip install 层会 100% 击穿缓存 ——
-# 实测每次都要在 QEMU 里重装依赖，多花 4~5 分钟。它被挪到文件末尾了。
+LABEL org.opencontainers.image.title="TG 自动签到面板" \
+      org.opencontainers.image.description="Telegram 自动签到 + 可视化 Web 面板（单容器部署）" \
+      org.opencontainers.image.source="${IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="MIT"
+
 ENV TZ=Asia/Shanghai \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    APP_VERSION=${APP_VERSION}
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata ca-certificates curl \
@@ -45,17 +51,6 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 COPY backend/app ./app
 COPY VERSION ./VERSION
 COPY --from=web /web/dist ./static
-
-# 以下两层的内容每次都不同（版本号 / commit / 构建时间），必须放在最后：
-# 它们只影响自己这一层，不会让上面的 apt-get、pip install 白跑一遍。
-ENV APP_VERSION=${APP_VERSION}
-
-LABEL org.opencontainers.image.title="TG 自动签到面板" \
-      org.opencontainers.image.description="Telegram 自动签到 + 可视化 Web 面板（单容器部署）" \
-      org.opencontainers.image.source="${IMAGE_SOURCE}" \
-      org.opencontainers.image.revision="${VCS_REF}" \
-      org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.licenses="MIT"
 
 VOLUME ["/app/data"]
 EXPOSE 8000

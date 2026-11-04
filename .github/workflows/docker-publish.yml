@@ -208,14 +208,10 @@ jobs:
           build-args: |
             APP_VERSION=${{ steps.version.outputs.value }}
             VCS_REF=${{ github.sha }}
+            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
-          # 缓存用「镜像仓库」而不是 type=gha：
-          # GHA 缓存后端的索引 key 会随构建参数变化（实测同一分支多次构建拿到
-          # 互不相同的 index-*-<hash>），cache-from 永远空集，apt-get / pip install
-          # 每次都在 QEMU 里重装（arm64 单步 3~5 分钟）。
-          # registry 缓存的 key 是固定的 tag，不受构建参数影响，一定能复用。
-          cache-from: type=registry,ref=${{ steps.targets.outputs.ghcr_image }}:buildcache
-          cache-to: type=registry,ref=${{ steps.targets.outputs.ghcr_image }}:buildcache,mode=max,ignore-error=true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
           provenance: true
           sbom: true
 
