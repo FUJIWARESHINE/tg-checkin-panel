@@ -48,6 +48,9 @@
   - 现在这两个易变指令被移到文件末尾，`apt-get`、`pip install`、前端 `npm ci`
     都能命中缓存，只重建应用代码那一层。
   - 版本号仍通过 `ENV APP_VERSION` 注入运行时，行为不变。
+- 判断依据：只看 `actions/runs/<id>/jobs` 里「构建并推送」这一步的耗时，
+  以及构建日志里 `RUN apt-get` / `RUN pip install` 两行是 `DONE` 还是 `CACHED`。
+  缓存正常时这两行必须是 `CACHED`，否则说明又有易变指令跑到它们前面去了。
 
 ## [1.3.0] - 2026-11-03
 
