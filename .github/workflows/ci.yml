@@ -1,7 +1,7 @@
 name: CI 代码校验
 
 # Pull Request 时的快速反馈（不构建镜像，节省时间与额度）。
-# main 分支推送的校验由 docker-publish.yml 的 verify job 负责，避免重复运行。
+# 测试在生产分支上合并前就把关，docker-publish.yml 只管构建与发布。
 on:
   pull_request:
     branches: [main]
