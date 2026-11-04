@@ -41,16 +41,19 @@
 
 ### 修复（镜像构建变慢）
 
-- **Docker 构建缓存 100% 击穿**：`ENV ... APP_VERSION=${APP_VERSION}` 与
-  `LABEL ... revision/created` 写在 `apt-get`、`pip install` **之前**，
-  而版本号 / commit / 构建时间每次构建都不同，导致这两层及其后所有层每次重建。
-  在 arm64（QEMU 模拟）里重跑 `pip install` 单步就要 3~5 分钟。
-  - 现在这两个易变指令被移到文件末尾，`apt-get`、`pip install`、前端 `npm ci`
-    都能命中缓存，只重建应用代码那一层。
-  - 版本号仍通过 `ENV APP_VERSION` 注入运行时，行为不变。
-- 判断依据：只看 `actions/runs/<id>/jobs` 里「构建并推送」这一步的耗时，
-  以及构建日志里 `RUN apt-get` / `RUN pip install` 两行是 `DONE` 还是 `CACHED`。
-  缓存正常时这两行必须是 `CACHED`，否则说明又有易变指令跑到它们前面去了。
+- **Docker 构建缓存 100% 击穿**，两个原因叠加：
+  1. `ENV ... APP_VERSION=${APP_VERSION}` 与 `LABEL ... revision/created` 写在
+     `apt-get`、`pip install` **之前**，而版本号 / commit / 构建时间每次构建都不同，
+     这两层及其后所有层每次重建。arm64 走 QEMU，`pip install` 单步就要 3~5 分钟。
+     现已把这两个易变指令移到文件末尾，并从构建参数里去掉每次变化的 `BUILD_DATE`
+     （`org.opencontainers.image.created` 由 `docker/metadata-action` 注入）。
+  2. `cache-from: type=gha` **没有指定 scope**，缓存的命名空间每次运行都不一样
+     （实测 7 次构建拿到 7 个互不相同的 `gha:<key>`），`cache-from` 永远是空集。
+     现改为固定 `scope=tg-panel`，并降为 `mode=min`（只缓存最终镜像层），
+     避免 10GB 额度被中间层挤爆后整体淘汰。
+- 判断依据：看 `actions/runs/<id>/jobs` 里「构建并推送」这一步的耗时，
+  以及构建日志里 `RUN apt-get` / `RUN pip install` 是 `DONE` 还是 `CACHED`。
+  缓存正常时这两行必须是 `CACHED`。
 
 ## [1.3.0] - 2026-11-03
 

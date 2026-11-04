@@ -19,7 +19,6 @@ FROM python:3.12-slim
 # CI 会传入真实版本号（= git tag）；本地构建时留空则读 VERSION 文件
 ARG APP_VERSION=""
 ARG VCS_REF="unknown"
-ARG BUILD_DATE=""
 ARG IMAGE_SOURCE="https://github.com/FUJIWARESHINE/tg-checkin-panel"
 
 # 注意：这里只能放「每次构建都相同」的变量。
@@ -56,7 +55,6 @@ LABEL org.opencontainers.image.title="TG 自动签到面板" \
       org.opencontainers.image.source="${IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${VCS_REF}" \
       org.opencontainers.image.version="${APP_VERSION}" \
-      org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.licenses="MIT"
 
 VOLUME ["/app/data"]

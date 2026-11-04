@@ -208,10 +208,12 @@ jobs:
           build-args: |
             APP_VERSION=${{ steps.version.outputs.value }}
             VCS_REF=${{ github.sha }}
-            BUILD_DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # 必须显式指定 scope：默认命名空间会随每次运行变化，导致 cache-from 永远命中不了，
+          # apt-get / pip install 每次都在 QEMU 里重装（实测单步 3~5 分钟）。
+          # mode=min 只缓存最终镜像用到的层，避免 10GB 额度被中间层挤爆而遭淘汰。
+          cache-from: type=gha,scope=tg-panel
+          cache-to: type=gha,scope=tg-panel,mode=min,ignore-error=true
           provenance: true
           sbom: true
 
