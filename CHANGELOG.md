@@ -54,6 +54,9 @@
 - 判断依据：看 `actions/runs/<id>/jobs` 里「构建并推送」这一步的耗时，
   以及构建日志里 `RUN apt-get` / `RUN pip install` 是 `DONE` 还是 `CACHED`。
   缓存正常时这两行必须是 `CACHED`。
+- 维护约定：以后往 Dockerfile 里加 `ENV` / `LABEL` / `ARG`，只允许放「每次构建都相同」
+  的值，且必须位于 `COPY` 之后；`.github/workflows/docker-publish.yml` 里的
+  `scope=tg-panel` 不要改名，改一次等同于放弃全部历史缓存。
 
 ## [1.3.0] - 2026-11-03
 
