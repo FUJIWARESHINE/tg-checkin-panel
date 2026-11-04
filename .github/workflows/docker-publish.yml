@@ -144,19 +144,19 @@ jobs:
           hub_image="docker.io/${hub_user}/${repo}"
 
           if [ -n "${DOCKERHUB_TOKEN}" ]; then
-            names="${ghcr_image},${hub_image}"
             echo "dockerhub=true" >> "$GITHUB_OUTPUT"
-            echo "推送目标：GHCR + Docker Hub（${hub_image}）"
+            echo "推送目标：GHCR + Docker Hub（merge 阶段复制到 hub）"
           else
-            names="${ghcr_image}"
             echo "dockerhub=false" >> "$GITHUB_OUTPUT"
             echo "::warning title=Docker Hub 未启用::未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN，本次只推 GHCR"
           fi
 
-          # 推送时按 digest 输出（不带 tag），由 merge job 统一打标签；
-          # 不推送时只写缓存，验证构建耗时用
+          # 推送时按 digest 输出（不带 tag），由 merge job 统一打标签。
+          # 注意必须显式写 push=true：type=image 的 push 默认是 false，
+          # 少了它只会导出到本地，registry 里查不到 digest，merge 会 404。
+          # name 只给 GHCR（单个名字，避免多值解析坑），Docker Hub 在 merge 阶段复制过去。
           if [ "${PUSH_IMAGE}" = "true" ]; then
-            echo "outputs=type=image,\"name=${names}\",push-by-digest=true,name-canonical=true" >> "$GITHUB_OUTPUT"
+            echo "outputs=type=image,\"name=${ghcr_image}\",push-by-digest=true,name-canonical=true,push=true" >> "$GITHUB_OUTPUT"
           else
             echo "outputs=type=cacheonly" >> "$GITHUB_OUTPUT"
           fi
@@ -318,16 +318,13 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             ${refs}
 
-          # Docker Hub：把同样的标签映射到 hub 镜像名
+          # Docker Hub：源仍然是 GHCR 的 digest（层只推在 GHCR），
+          # imagetools 会把 blob 跨仓库复制过去，这样不用重复推两遍。
           if [ "${DOCKERHUB_ON}" = "true" ]; then
-            hub_refs=""
-            for f in *; do
-              hub_refs="${hub_refs} ${HUB_IMAGE}@sha256:${f}"
-            done
             docker buildx imagetools create \
               $(jq -cr --arg src "${GHCR_IMAGE}" --arg dst "${HUB_IMAGE}" \
                 '.tags | map("-t " + sub($src; $dst)) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-              ${hub_refs}
+              ${refs}
           fi
 
           echo "== 清单校验 =="
