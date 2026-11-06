@@ -360,15 +360,28 @@ onMounted(load)
         </n-descriptions-item>
         <n-descriptions-item label="时区">{{ detailTask.timezone || '跟随全局' }}</n-descriptions-item>
         <n-descriptions-item label="下一个执行">
-          {{ detailTask.next_runs?.length ? formatTime(detailTask.next_runs[0]) : '—' }}
+          {{
+            detailTask.next_run_at
+              ? formatTime(detailTask.next_run_at)
+              : detailTask.next_runs?.length
+                ? formatTime(detailTask.next_runs[0])
+                : '—'
+          }}
         </n-descriptions-item>
         <n-descriptions-item label="最后执行">{{ formatTime(detailTask.last_run_at) }}</n-descriptions-item>
         <n-descriptions-item label="成功规则" :span="2">
           {{ detailTask.success_rule?.mode }} · {{ (detailTask.success_rule?.keywords || []).join(' / ') || '（收到回复即成功）' }}
         </n-descriptions-item>
         <n-descriptions-item label="重试策略" :span="2">
-          最多 {{ detailTask.retry_policy?.max }} 次，间隔 {{ detailTask.retry_policy?.interval_sec }}s，
-          {{ detailTask.retry_policy?.until_success ? '重试到成功' : '按次数上限' }}
+          <template v-if="detailTask.retry_policy?.until_success">
+            失败后每 {{ detailTask.retry_policy?.interval_sec }}s 重试一次，直到成功（最多 50 次）
+          </template>
+          <template v-else-if="detailTask.retry_policy?.max">
+            失败后最多重试 {{ detailTask.retry_policy?.max }} 次（共
+            {{ detailTask.retry_policy?.max + 1 }} 次执行），间隔
+            {{ detailTask.retry_policy?.interval_sec }}s
+          </template>
+          <template v-else>失败不重试</template>
         </n-descriptions-item>
         <n-descriptions-item label="最后消息" :span="2">
           {{ detailTask.last_message || '—' }}

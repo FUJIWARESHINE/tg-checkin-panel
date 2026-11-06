@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     default_retry_interval: int = 3600
     task_timeout_sec: int = 300
     step_timeout_sec: int = 60
+    # 动作流结束后额外等待机器人回话的时间（秒）。
+    # 动作流里没写 wait_reply（例如只发一条「每日签到」）时，成功规则仍然需要回复文本，
+    # 这里留一个收尾窗口，避免这类配置稳定判失败。
+    reply_grace_sec: int = 15
     max_concurrent_tasks: int = 3
     api_min_interval: float = 0.35
     api_max_floodwait_retries: int = 2

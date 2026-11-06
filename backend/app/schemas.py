@@ -2,12 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Literal
+from datetime import datetime, timezone
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from .utils.cron import ScheduleError, to_cron_expression
+
+
+def _as_utc(value: Any) -> Any:
+    """把 SQLite 读出来的「无时区 UTC 墙钟时间」补上时区。
+
+    SQLite 的 DateTime 列不保存时区，出库是 naive datetime，直接序列化成
+    "2026-11-06T01:08:00" 后前端会当成本地时间显示（比实际早 8 小时）。
+    """
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+# 用于所有「出参时间字段」：naive 一律按 UTC 解释
+UtcDatetime = Annotated[datetime, BeforeValidator(_as_utc)]
 
 STEP_TYPES = {
     "send_text",
@@ -276,12 +291,12 @@ class TaskOut(BaseModel):
     notify_channel_ids: list[int] = []
     notify_on: list[str] = []
     enabled: bool
-    last_run_at: datetime | None = None
-    next_run_at: datetime | None = None
+    last_run_at: UtcDatetime | None = None
+    next_run_at: UtcDatetime | None = None
     last_status: str = ""
     last_message: str = ""
     schedule_text: str = ""
-    next_runs: list[datetime] = []
+    next_runs: list[UtcDatetime] = []
 
 
 class TaskToggleIn(BaseModel):
@@ -315,7 +330,7 @@ class TaskTemplateOut(BaseModel):
     success_rule: dict[str, Any]
     retry_policy: dict[str, Any]
     ref_count: int = 0
-    created_at: datetime | None = None
+    created_at: UtcDatetime | None = None
 
 
 # ---------------------------------------------------------------- 记录
@@ -339,7 +354,7 @@ class RecordOut(BaseModel):
     error: str
     notify_status: str = ""
     detail: dict[str, Any] | None = None
-    run_at: datetime
+    run_at: UtcDatetime
 
 
 class StatsOut(BaseModel):
@@ -386,8 +401,8 @@ class NotifyChannelOut(BaseModel):
     quiet_end: str
     quiet_only_fail: bool
     last_result: str = ""
-    last_sent_at: datetime | None = None
-    created_at: datetime | None = None
+    last_sent_at: UtcDatetime | None = None
+    created_at: UtcDatetime | None = None
 
 
 class TestNotifyIn(BaseModel):

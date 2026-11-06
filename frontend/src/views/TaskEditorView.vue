@@ -94,6 +94,18 @@ const channelOptions = computed(() =>
   channels.value.map((c) => ({ label: `${c.name}（${c.type}）`, value: c.id }))
 )
 
+/** 动作流里有没有「等待回复」步骤：没有的话成功判定只能靠执行结束后的收尾窗口拿回复 */
+const flowHasWaitReply = computed(
+  () => (form.value.action_flow || []).some((step) => step.type === 'wait_reply')
+)
+const showReplyHint = computed(() => {
+  const keywords = keywordsText.value
+    .split('\n')
+    .map((v) => v.trim())
+    .filter(Boolean)
+  return form.value.success_rule.mode !== 'all' && keywords.length > 0 && !flowHasWaitReply.value
+})
+
 const scheduleTypeOptions = [
   { label: 'Cron 表达式', value: 'cron' },
   { label: '每天定点', value: 'daily' },
@@ -443,6 +455,10 @@ onMounted(load)
               />
             </n-form-item>
           </n-form>
+          <n-alert v-if="showReplyHint" type="warning" :bordered="false" style="font-size: 12px">
+            动作流里没有「等待回复」步骤：执行结束后会额外等 15 秒收尾窗口，拿机器人的回话再判定。
+            建议在发送消息后加一步 wait_reply，判定更准、也不用白等。
+          </n-alert>
         </n-card>
 
         <n-card class="soft-card" title="重试策略" size="small" style="margin-top: 16px">
@@ -462,6 +478,10 @@ onMounted(load)
               <n-switch v-model:value="form.retry_policy.until_success" />
             </n-form-item>
           </n-form>
+          <div style="font-size: 12px; opacity: 0.6">
+            失败后按间隔再执行一次，最多重试 {{ form.retry_policy.max }} 次（即共
+            {{ form.retry_policy.max + 1 }} 次执行）；填 0 表示不重试。
+          </div>
         </n-card>
 
         <n-card class="soft-card" title="推送订阅" size="small" style="margin-top: 16px">

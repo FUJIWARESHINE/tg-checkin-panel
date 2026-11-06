@@ -323,6 +323,7 @@ async def _run_account(
                     thread_id=int(thread_id) if thread_id else None,
                     timeout_sec=task.timeout_sec or settings.task_timeout_sec,
                     step_timeout_sec=settings.step_timeout_sec,
+                    reply_grace_sec=settings.reply_grace_sec,
                     task_name=task.name,
                     target_id=target_id,
                 )
@@ -606,12 +607,18 @@ async def _mark_account_status(account_id: int, status: str, active: bool = Fals
 
 async def _maybe_retry(task: Task, attempt: int, account_ids: list[int] | None = None) -> None:
     policy = dict(task.retry_policy or {})
-    max_retry = int(policy.get("max") or settings.default_retry_max)
-    interval = int(policy.get("interval_sec") or settings.default_retry_interval)
+    raw_max = policy.get("max")
+    max_retry = settings.default_retry_max if raw_max is None else max(0, int(raw_max))
+    raw_interval = policy.get("interval_sec")
+    interval = settings.default_retry_interval if raw_interval is None else int(raw_interval)
     until_success = bool(policy.get("until_success"))
+    # 已经重试过的次数：attempt=1 是首次执行，还没重试过
+    retries_done = max(0, attempt - 1)
 
-    if not until_success and attempt > max_retry:
-        logger.info("任务 %s 已达最大重试次数 %s，停止重试", task.name, max_retry)
+    # 注意 max=0 必须真的表示「不重试」：以前用 `policy.get("max") or 默认值`，
+    # 0 被当成空值回落到默认 3 次，用户关掉重试却仍会白跑三轮。
+    if not until_success and retries_done >= max_retry:
+        logger.info("任务 %s 已重试 %s 次（上限 %s 次），停止重试", task.name, retries_done, max_retry)
         return
     if attempt > 50:
         logger.warning("任务 %s 重试次数过多，强制停止", task.name)
@@ -619,11 +626,13 @@ async def _maybe_retry(task: Task, attempt: int, account_ids: list[int] | None =
 
     from .scheduler import schedule_retry
 
-    schedule_retry(task.id, max(30, interval), attempt + 1, account_ids=account_ids)
+    delay = max(30, interval)
+    schedule_retry(task.id, delay, attempt + 1, account_ids=account_ids)
     logger.info(
-        "任务 %s 将在 %s 秒后重试（第 %s 次，%s 个账号）",
+        "任务 %s 将在 %s 秒后重试（第 %s%s 次，%s 个账号）",
         task.name,
-        interval,
-        attempt + 1,
+        delay,
+        attempt,
+        "" if until_success else f"/{max_retry}",
         len(account_ids or []),
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -86,17 +87,30 @@ def build_trigger(schedule_type: str, schedule_value: str, timezone_name: str):
 def next_run_times(
     schedule_type: str, schedule_value: str, timezone_name: str = "Asia/Shanghai", count: int = 3
 ) -> list[datetime]:
-    """预览接下来的执行时间（用于前端展示）。"""
+    """预览接下来的执行时间（用于前端展示）。
+
+    必须在任务自己的时区里计算：cron 的 `0 8 * * *` 指的是**当地** 8 点，
+    以前拿 UTC 当基准，预览出来的时间会和调度器实际执行时间差一个时区。
+    """
+    try:
+        tz = ZoneInfo(timezone_name or "UTC")
+    except Exception:  # noqa: BLE001 - 时区名写错时回落到 UTC，别让预览接口整个挂掉
+        tz = timezone.utc
     try:
         if schedule_type == "interval":
             seconds = parse_interval(schedule_value)
             base = datetime.now(timezone.utc)
-            return [base + timedelta(seconds=seconds * (i + 1)) for i in range(count)]
+            return [(base + timedelta(seconds=seconds * (i + 1))).astimezone(tz) for i in range(count)]
 
         expr = to_cron_expression(schedule_type, schedule_value)
-        if len(expr.split()) == 5:
-            expr = "0 " + expr  # croniter 支持 5 字段，但显式补秒更稳
-        itr = croniter(expr, datetime.now(timezone.utc))
+        # croniter 默认把 6 字段里的「秒」放在最后，本项目（与 APScheduler 一致）是放在最前面。
+        # 之前给 5 字段补秒补成 "0 0 8 * * *"，正好被当成「每月 8 号 0 点每一秒」，
+        # 于是「下一个执行」显示成了 11-08 00:00，和实际调度完全对不上。
+        itr = croniter(
+            expr,
+            datetime.now(tz),
+            second_at_beginning=len(expr.split()) == 6,
+        )
         return [itr.get_next(datetime) for _ in range(count)]
     except (ScheduleError, ValueError):
         return []

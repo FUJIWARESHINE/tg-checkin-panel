@@ -47,10 +47,12 @@ async def _run_job(
 
     async with _sem():
         try:
+            # 只有手动触发才无视「今天已成功」；定时/重试/补跑都必须先查当日记录，
+            # 否则重试会把已经签过的账号再跑一遍（重复签到，也让失败重试看起来像反复执行）。
             await runner.execute_task(
                 task_id,
                 trigger=trigger,
-                force=(trigger != "catchup"),
+                force=(trigger == "manual"),
                 attempt=attempt,
                 only_accounts=account_ids,
             )
@@ -204,15 +206,20 @@ async def catch_up() -> list[str]:
             .scalars()
             .all()
         )
-        pending: list[tuple[int, str]] = []
+        pending: list[tuple[int, str, str]] = []
         for task in tasks:
             session.expunge(task)
-            pending.append((task.id, task.name))
+            pending.append((task.id, task.name, task.timezone or settings.tz))
 
-    for task_id, name in pending:
+    for task_id, name, tz_name in pending:
         try:
+            # 已经排了重试的不要再补一轮：否则每次重启都会在原有重试之外多跑一次，
+            # 这类「同一天跑好几遍」大多就是这么来的。
+            if scheduler.get_job(f"retry:{task_id}") is not None:
+                logger.info("任务 %s 已有待执行的重试，跳过启动补跑", name)
+                continue
             # 多账号任务：只补今天还没成功的账号
-            todo = await runner.pending_accounts_today(task_id, settings.tz)
+            todo = await runner.pending_accounts_today(task_id, tz_name)
             if not todo:
                 continue
             logger.info("补跑任务：%s（%s 个账号待执行）", name, len(todo))

@@ -41,6 +41,8 @@ class RunContext:
     thread_id: int | None = None
     timeout_sec: int = 300
     step_timeout_sec: int = 60
+    # 动作流跑完后额外等待机器人回话的秒数（没有 wait_reply 的流程靠它拿到回复）
+    reply_grace_sec: float = 15.0
     variables: dict[str, Any] = field(default_factory=dict)
     inbox: asyncio.Queue = field(default_factory=asyncio.Queue)
     last_sent: Any = None
@@ -462,6 +464,54 @@ def detach_inbox(ctx: RunContext, handler: Any) -> None:
         pass
 
 
+async def _drain_replies(ctx: RunContext, timeout: float) -> str:
+    """在收尾窗口内把所有到达的文本回复收进 ctx，返回最后一条。
+
+    只处理非陈旧、非空文本；图片/按钮类消息跳过（成功规则目前只按文本判定）。
+    """
+    deadline = time.monotonic() + timeout
+    last = ""
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        try:
+            message = await asyncio.wait_for(ctx.inbox.get(), timeout=remaining)
+        except asyncio.TimeoutError:
+            break
+        if _is_stale(ctx, message):
+            continue
+        text = (getattr(message, "raw_text", "") or "").strip()
+        if not text:
+            continue
+        ctx.reply_message = message
+        ctx.reply_text = text
+        ctx.variables["last_reply"] = text
+        if not ctx.replies or ctx.replies[-1] != text:
+            ctx.replies.append(text)
+        last = text
+    return last
+
+
+async def _collect_tail_reply(ctx: RunContext, started: float, flow_len: int) -> None:
+    """动作流结束后补收一小段机器人回复。
+
+    有些签到流程只发一句指令（动作流里没有 wait_reply），但成功规则是按回复关键词判定，
+    此时 reply_text 始终为空，任务会稳定判「回复未命中成功关键词」，再按重试策略白跑几轮。
+    这里给一个收尾窗口把回话取回来，让「只发消息」的配置也能正常判定。
+    """
+    if ctx.reply_text or ctx.reply_grace_sec <= 0:
+        return
+    remaining_total = ctx.timeout_sec - (time.monotonic() - started)
+    wait = min(float(ctx.reply_grace_sec), max(0.0, remaining_total))
+    if wait <= 0:
+        return
+    got = await _drain_replies(ctx, wait)
+    if got:
+        ctx.note(flow_len, "wait_reply", f"补收到回复：{got[:60]}", ok=True)
+        logger.info("[%s] 动作流结束后补收到回复：%s", ctx.task_name, got[:60])
+
+
 async def run_flow(ctx: RunContext, flow: list[dict[str, Any]]) -> RunContext:
     """顺序执行动作流。异常向外抛，由 runner 统一处理。"""
     handler = await attach_inbox(ctx)
@@ -486,6 +536,8 @@ async def run_flow(ctx: RunContext, flow: list[dict[str, Any]]) -> RunContext:
                 ctx.note(index, step_type, str(exc), ok=False)
                 logger.warning("[%s] 步骤 %s %s 失败：%s", ctx.task_name, index + 1, step_type, exc)
                 raise
+        # 流程里没有 wait_reply 时，也要给机器人留出回话窗口，否则成功规则拿不到回复文本
+        await _collect_tail_reply(ctx, started, len(flow))
     except _StopFlow:
         pass
     finally:
