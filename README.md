@@ -250,8 +250,8 @@ docker pull docker.io/xuthsand/tg-checkin-panel:latest
 | 触发条件 | 生成的镜像标签 | 说明 |
 |---|---|---|
 | 推送 tag `v1.2.3` | `1.2.3`、`1.2`、`1`、`latest` | **正式发版**，同时自动创建 GitHub Release |
-| 推送到 `main` 分支 | `edge`、`sha-xxxxxxx` | 最新开发版，不动 `latest` |
-| 手动运行工作流 | `edge`、`sha-xxxxxxx` | 可勾选是否推送 |
+| 推送到 `main` 分支 | `edge`、`sha-xxxxxxx`、`latest` | 最新开发版，`latest` 跟随最近一次构建 |
+| 手动运行工作流 | `edge`、`sha-xxxxxxx`、`latest` | 可勾选是否推送 |
 
 镜像同时支持 `linux/amd64` 与 `linux/arm64`（群晖 / 树莓派 / Apple Silicon 可直接用），两个仓库的标签完全一致。
 
